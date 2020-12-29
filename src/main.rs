@@ -12,6 +12,7 @@ use std::convert::TryInto;
 use enum_primitive::*;
 use structopt::StructOpt;
 use std::str::FromStr;
+use std::vec::Vec;
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 enum FrameType {
@@ -113,6 +114,9 @@ struct ApplyRandomEditsCmd {
 
     #[structopt(short="p", long, default_value="0.0")]
     iframe_prob: f32,
+
+    #[structopt(short, long, default_value="0")]
+    reorder_iframes: usize,
 }
 
 #[derive(Debug)]
@@ -157,10 +161,9 @@ fn create_edit_table(input_file : &mut File, opt: & CreateEditTableCmd) -> std::
             let nal_start_glob = nal_start + start_offset as i32;
             let nal_end_glob = nal_end + start_offset as i32;
             let nal_size = nal_end - nal_start;
-            read_nal_unit(h2, buf.as_mut_ptr().add(nal_start_glob.try_into().unwrap()), nal_end - nal_start);
+            read_nal_unit(h2, buf.as_mut_ptr().add(nal_start_glob.try_into().unwrap()), nal_size);
 
             let frame_type = FrameType::from_sh_slice_type((*(*h2).sh).slice_type);
-            let nal_unit_type = NALUnitType::from_i32((*(*h2).nal).nal_unit_type).unwrap();
 
             let entry = EditTableEntry {
                 nal_start: nal_start_glob as usize,
@@ -175,6 +178,7 @@ fn create_edit_table(input_file : &mut File, opt: & CreateEditTableCmd) -> std::
                         frame_type
                        ).as_bytes())?;
 
+            //let nal_unit_type = NALUnitType::from_i32((*(*h2).nal).nal_unit_type).unwrap();
             //println!("Frame {:?} - FrameType {:?} - NAL Unit Type {:?} - NAL Size {:}",
             //         (*(*h2).sh).frame_num,
             //         frame_type,
@@ -195,7 +199,7 @@ fn apply_edit_table(input_file : &mut File, opt: & ApplyEditTableCmd) -> std::io
     input_file.read_to_end(&mut buf)?;
 
     let edit_table_file = File::open(&opt.edit_table_in)?;
-    let mut edit_table_reader = BufReader::new(edit_table_file);
+    let edit_table_reader = BufReader::new(edit_table_file);
 
     let mut outfile = File::create(&opt.output)?;
     for line in edit_table_reader.lines().map(|l| l.unwrap()) {
@@ -209,28 +213,50 @@ fn apply_edit_table(input_file : &mut File, opt: & ApplyEditTableCmd) -> std::io
     Ok(())
 }
 
+struct LineInfo {
+    line: String,
+    entry: EditTableEntry,
+    delete_line: bool,
+}
+
 fn apply_random_edits(opt: & ApplyRandomEditsCmd) -> std::io::Result<()> {
     let edit_table_file = File::open(&opt.edit_table_in)?;
-    let mut edit_table_reader = BufReader::new(edit_table_file);
+    let edit_table_reader = BufReader::new(edit_table_file);
 
-    let mut edit_table_out = File::create(&opt.edit_table_out)?;
+    let mut lines = Vec::new();
+
     let mut num_iframes = 0;
     for line in edit_table_reader.lines().map(|l| l.unwrap()) {
-        if line.starts_with("#") {
-            continue;
-        }
+        //if line.starts_with("#") {
+        //    continue;
+        //}
         let entry_str = line.split("|").next().unwrap();
         let entry = EditTableEntry::from_string(entry_str);
         let delete_line = entry.iframe && rand::random::<f32>() > opt.iframe_prob && num_iframes > 1;
-        if delete_line {
-            edit_table_out.write_all("#".as_bytes())?;
-        }
-        edit_table_out.write_all(format!("{}\n", line).as_bytes())?;
-
         if entry.iframe {
             num_iframes += 1;
         }
+        lines.push(LineInfo{line: line, entry: entry, delete_line: delete_line});
+
     }
+
+    let num_iframes = lines.iter().enumerate().filter(|(_idx, el)| el.entry.iframe && !el.delete_line).count();
+    for _ in 0..opt.reorder_iframes{
+        let mut start = lines.iter().enumerate().cycle().filter(|(_idx, el)| el.entry.iframe && !el.delete_line);
+        let start_el = start.nth(rand::random::<usize>() % num_iframes).unwrap().0;
+        let end_el = start.nth(4).unwrap().0;
+        println!("Swap {}, {}", start_el, end_el);
+        lines.swap(start_el, end_el);
+    }
+
+    let mut edit_table_out = File::create(&opt.edit_table_out)?;
+    for line in lines {
+        if line.delete_line {
+            edit_table_out.write_all("#".as_bytes())?;
+        }
+        edit_table_out.write_all(format!("{}\n", line.line).as_bytes())?;
+    }
+
     Ok(())
 }
 
