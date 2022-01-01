@@ -1,9 +1,13 @@
+pub(crate) mod h264;
+pub(crate) mod h264_iterator;
+
 extern crate enum_primitive;
 extern crate libh264bitstream_sys;
 extern crate rand;
 extern crate structopt;
 
 use enum_primitive::*;
+use h264::FrameType;
 use libh264bitstream_sys::*;
 use std::convert::TryInto;
 use std::fs::File;
@@ -18,35 +22,6 @@ use std::thread;
 use std::sync::{Mutex, Arc};
 use std::net::{SocketAddrV4, UdpSocket};
 use rosc::OscPacket;
-
-#[derive(Debug, Copy, Clone, PartialEq)]
-enum FrameType {
-    P,
-    B,
-    I,
-    POnly,
-    BOnly,
-    IOnly,
-    SPOnly,
-    SIOnly,
-}
-
-impl FrameType {
-    fn from_sh_slice_type(sh_slice_type: c_int) -> FrameType {
-        use FrameType::*;
-        match sh_slice_type {
-            0 => P,
-            1 => B,
-            2 => I,
-            5 => POnly,
-            6 => BOnly,
-            7 => IOnly,
-            8 => SPOnly,
-            9 => SIOnly,
-            _ => panic!("not impl"),
-        }
-    }
-}
 
 enum_from_primitive! {
     #[derive(Debug, Copy, Clone, PartialEq)]
