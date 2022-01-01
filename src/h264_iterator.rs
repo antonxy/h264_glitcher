@@ -86,11 +86,12 @@ where
                     nal_end - nal_start,
                 )
             };
-            assert_eq!(
-                ret,
-                nal_end - nal_start,
-                "expecting read_nal_unit to return nal_size"
-            );
+            if ret == -1 || ret != (nal_end - nal_start) {
+                // sometimes, read_nal_unit fails
+                unsafe { libh264bitstream::h264_free(h2) };
+                self.stream.consume(nal_end.try_into().unwrap());
+                continue;
+            }
 
             let frame_type = unsafe { FrameType::from_sh_slice_type((*(*h2).sh).slice_type) };
 
