@@ -1,19 +1,19 @@
-extern crate libh264bitstream_sys;
 extern crate enum_primitive;
+extern crate libh264bitstream_sys;
 extern crate rand;
 extern crate structopt;
 
-use libh264bitstream_sys::*;
-use std::fs::File;
-use std::io::{Read, Write, BufReader, BufRead};
-use std::path::PathBuf;
-use std::os::raw::c_int;
-use std::convert::TryInto;
 use enum_primitive::*;
-use structopt::StructOpt;
+use libh264bitstream_sys::*;
+use std::convert::TryInto;
+use std::fs::File;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{Seek, SeekFrom};
+use std::os::raw::c_int;
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::vec::Vec;
-use std::io::{Seek, SeekFrom};
+use structopt::StructOpt;
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 enum FrameType {
@@ -28,7 +28,7 @@ enum FrameType {
 }
 
 impl FrameType {
-    fn from_sh_slice_type(sh_slice_type : c_int) -> FrameType {
+    fn from_sh_slice_type(sh_slice_type: c_int) -> FrameType {
         use FrameType::*;
         match sh_slice_type {
             0 => P,
@@ -39,7 +39,7 @@ impl FrameType {
             7 => IOnly,
             8 => SPOnly,
             9 => SIOnly,
-            _ => panic!("not impl")
+            _ => panic!("not impl"),
         }
     }
 }
@@ -78,7 +78,6 @@ struct Opt {
 
     #[structopt(subcommand)]
     cmd: Command,
-
 }
 
 #[derive(Debug, StructOpt)]
@@ -111,22 +110,22 @@ struct ApplyRandomEditsCmd {
     #[structopt(short, long, parse(from_os_str))]
     edit_table_in: PathBuf,
 
-    #[structopt(short="o", long, parse(from_os_str))]
+    #[structopt(short = "o", long, parse(from_os_str))]
     edit_table_out: PathBuf,
 
-    #[structopt(short="p", long, default_value="0.0")]
+    #[structopt(short = "p", long, default_value = "0.0")]
     iframe_prob: f32,
 
-    #[structopt(short, long, default_value="0")]
+    #[structopt(short, long, default_value = "0")]
     reorder_iframes: usize,
 }
 
 #[derive(Debug, StructOpt)]
 struct QuickModeCmd {
-    #[structopt(short="p", long, default_value="0.0")]
+    #[structopt(short = "p", long, default_value = "0.0")]
     iframe_prob: f32,
 
-    #[structopt(short, long, default_value="0")]
+    #[structopt(short, long, default_value = "0")]
     reorder_iframes: usize,
 
     #[structopt(short, long, parse(from_os_str))]
@@ -142,15 +141,19 @@ struct EditTableEntry {
 
 impl EditTableEntry {
     fn to_string(&self) -> String {
-        format!("0x{:06x}-0x{:06x}-{:5}", self.nal_start, self.nal_end, self.iframe)
+        format!(
+            "0x{:06x}-0x{:06x}-{:5}",
+            self.nal_start, self.nal_end, self.iframe
+        )
     }
     fn from_string(string: &str) -> EditTableEntry {
         let mut it = string.split("-");
         let start_str = it.next().unwrap();
         let end_str = it.next().unwrap();
         let iframe_str = it.next().unwrap();
-        let parse_hex = |s : &str| usize::from_str_radix(s.trim().trim_start_matches("0x"), 16).unwrap();
-        let parse_bool = |s : &str| bool::from_str(s.trim()).unwrap();
+        let parse_hex =
+            |s: &str| usize::from_str_radix(s.trim().trim_start_matches("0x"), 16).unwrap();
+        let parse_bool = |s: &str| bool::from_str(s.trim()).unwrap();
         EditTableEntry {
             nal_start: parse_hex(start_str),
             nal_end: parse_hex(end_str),
@@ -159,23 +162,32 @@ impl EditTableEntry {
     }
 }
 
-fn create_edit_table(input_file : &mut File, opt: & CreateEditTableCmd) -> std::io::Result<()> {
+fn create_edit_table(input_file: &mut File, opt: &CreateEditTableCmd) -> std::io::Result<()> {
     let mut buf = Vec::new();
     input_file.read_to_end(&mut buf)?;
 
     let mut edit_table_out = File::create(&opt.edit_table_out)?;
     unsafe {
         let h2 = h264_new();
-        let mut start_offset : usize = 0;
+        let mut start_offset: usize = 0;
         let mut i = 0;
         while start_offset < buf.len() && opt.frames.map_or(true, |f| i < f) {
-            let mut nal_start : c_int = 0;
-            let mut nal_end : c_int = 0;
-            find_nal_unit(buf.as_mut_ptr().add(start_offset), (buf.len() - start_offset).try_into().unwrap(), &mut nal_start, &mut nal_end);
+            let mut nal_start: c_int = 0;
+            let mut nal_end: c_int = 0;
+            find_nal_unit(
+                buf.as_mut_ptr().add(start_offset),
+                (buf.len() - start_offset).try_into().unwrap(),
+                &mut nal_start,
+                &mut nal_end,
+            );
             let nal_start_glob = nal_start + start_offset as i32;
             let nal_end_glob = nal_end + start_offset as i32;
             let nal_size = nal_end - nal_start;
-            read_nal_unit(h2, buf.as_mut_ptr().add(nal_start_glob.try_into().unwrap()), nal_size);
+            read_nal_unit(
+                h2,
+                buf.as_mut_ptr().add(nal_start_glob.try_into().unwrap()),
+                nal_size,
+            );
 
             let frame_type = FrameType::from_sh_slice_type((*(*h2).sh).slice_type);
 
@@ -186,11 +198,14 @@ fn create_edit_table(input_file : &mut File, opt: & CreateEditTableCmd) -> std::
             };
 
             edit_table_out.write_all(
-                format!("{} | dec {:06} | Type {:?}\n",
-                        entry.to_string(),
-                        nal_start_glob,
-                        frame_type
-                       ).as_bytes())?;
+                format!(
+                    "{} | dec {:06} | Type {:?}\n",
+                    entry.to_string(),
+                    nal_start_glob,
+                    frame_type
+                )
+                .as_bytes(),
+            )?;
 
             //let nal_unit_type = NALUnitType::from_i32((*(*h2).nal).nal_unit_type).unwrap();
             //println!("Frame {:?} - FrameType {:?} - NAL Unit Type {:?} - NAL Size {:}",
@@ -208,7 +223,7 @@ fn create_edit_table(input_file : &mut File, opt: & CreateEditTableCmd) -> std::
     Ok(())
 }
 
-fn apply_edit_table(input_file : &mut File, opt: & ApplyEditTableCmd) -> std::io::Result<()> {
+fn apply_edit_table(input_file: &mut File, opt: &ApplyEditTableCmd) -> std::io::Result<()> {
     let mut buf = Vec::new();
     input_file.read_to_end(&mut buf)?;
 
@@ -233,7 +248,7 @@ struct LineInfo {
     delete_line: bool,
 }
 
-fn apply_random_edits(opt: & ApplyRandomEditsCmd) -> std::io::Result<()> {
+fn apply_random_edits(opt: &ApplyRandomEditsCmd) -> std::io::Result<()> {
     let edit_table_file = File::open(&opt.edit_table_in)?;
     let edit_table_reader = BufReader::new(edit_table_file);
 
@@ -246,17 +261,29 @@ fn apply_random_edits(opt: & ApplyRandomEditsCmd) -> std::io::Result<()> {
         //}
         let entry_str = line.split("|").next().unwrap();
         let entry = EditTableEntry::from_string(entry_str);
-        let delete_line = entry.iframe && rand::random::<f32>() > opt.iframe_prob && num_iframes >= 1;
+        let delete_line =
+            entry.iframe && rand::random::<f32>() > opt.iframe_prob && num_iframes >= 1;
         if entry.iframe {
             num_iframes += 1;
         }
-        lines.push(LineInfo{line: line, entry: entry, delete_line: delete_line});
-
+        lines.push(LineInfo {
+            line: line,
+            entry: entry,
+            delete_line: delete_line,
+        });
     }
 
-    let num_iframes = lines.iter().enumerate().filter(|(_idx, el)| el.entry.iframe && !el.delete_line).count();
+    let num_iframes = lines
+        .iter()
+        .enumerate()
+        .filter(|(_idx, el)| el.entry.iframe && !el.delete_line)
+        .count();
     for _ in 0..opt.reorder_iframes {
-        let mut start = lines.iter().enumerate().cycle().filter(|(_idx, el)| el.entry.iframe && !el.delete_line);
+        let mut start = lines
+            .iter()
+            .enumerate()
+            .cycle()
+            .filter(|(_idx, el)| el.entry.iframe && !el.delete_line);
         let start_el = start.nth(rand::random::<usize>() % num_iframes).unwrap().0;
         let end_el = start.nth(4).unwrap().0;
         println!("Swap {}, {}", start_el, end_el);
@@ -274,9 +301,9 @@ fn apply_random_edits(opt: & ApplyRandomEditsCmd) -> std::io::Result<()> {
     Ok(())
 }
 
-fn quick_mode(input_file : &mut File, opt: & QuickModeCmd) -> std::io::Result<()> {
+fn quick_mode(input_file: &mut File, opt: &QuickModeCmd) -> std::io::Result<()> {
     let create_opts = CreateEditTableCmd {
-        edit_table_out : PathBuf::from("/tmp/edtab"),
+        edit_table_out: PathBuf::from("/tmp/edtab"),
         frames: None,
     };
     create_edit_table(input_file, &create_opts)?;
@@ -308,5 +335,4 @@ fn main() -> std::io::Result<()> {
         Command::ApplyRandomEdits(opts) => apply_random_edits(&opts),
         Command::QuickMode(opts) => quick_mode(&mut file, &opts),
     }
-
 }
