@@ -11,3 +11,4 @@ libh264bitstream-sys = { path = "../libh264bitstream-sys" }
 enum_primitive = "0.1.1"
 rand = "0.8"
 structopt = "0.3"
+rosc = "0.6"

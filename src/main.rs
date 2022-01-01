@@ -14,6 +14,8 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::vec::Vec;
 use structopt::StructOpt;
+use std::net::{SocketAddrV4, UdpSocket};
+use rosc::OscPacket;
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 enum FrameType {
@@ -86,7 +88,7 @@ enum Command {
     ApplyEditTable(ApplyEditTableCmd),
     ApplyRandomEdits(ApplyRandomEditsCmd),
     QuickMode(QuickModeCmd),
-    Streaming,
+    Streaming(StreamingCmd),
 }
 
 #[derive(Debug, StructOpt)]
@@ -131,6 +133,12 @@ struct QuickModeCmd {
 
     #[structopt(short, long, parse(from_os_str))]
     output: PathBuf,
+}
+
+#[derive(Debug, StructOpt)]
+struct StreamingCmd {
+    #[structopt(short = "l", long, default_value = "0.0.0.0:8000")]
+    listen_addr: String,
 }
 
 #[derive(Debug)]
@@ -324,8 +332,42 @@ fn quick_mode(input_file: &mut File, opt: &QuickModeCmd) -> std::io::Result<()> 
     Ok(())
 }
 
-fn streaming_mode() -> std::io::Result<()> {
+fn streaming_mode(opt: &StreamingCmd) -> std::io::Result<()> {
+    let addr = match SocketAddrV4::from_str(&opt.listen_addr) {
+        Ok(addr) => addr,
+        Err(_) => panic!("Invalid listen_addr"),
+    };
+    let sock = UdpSocket::bind(addr).unwrap();
+    println!("Listening to {}", addr);
+
+    let mut buf = [0u8; rosc::decoder::MTU];
+
+    loop {
+        match sock.recv_from(&mut buf) {
+            Ok((size, addr)) => {
+                println!("Received packet with size {} from: {}", size, addr);
+                let packet = rosc::decoder::decode(&buf[..size]).unwrap();
+                handle_osc_packet(packet);
+            }
+            Err(e) => {
+                println!("Error receiving from socket: {}", e);
+                break;
+            }
+        }
+    }
     Ok(())
+}
+
+fn handle_osc_packet(packet: OscPacket) {
+    match packet {
+        OscPacket::Message(msg) => {
+            println!("OSC address: {}", msg.addr);
+            println!("OSC arguments: {:?}", msg.args);
+        }
+        OscPacket::Bundle(bundle) => {
+            println!("OSC Bundle: {:?}", bundle);
+        }
+    }
 }
 
 fn main() -> std::io::Result<()> {
@@ -339,6 +381,6 @@ fn main() -> std::io::Result<()> {
         Command::ApplyEditTable(opts) => apply_edit_table(&mut file, &opts),
         Command::ApplyRandomEdits(opts) => apply_random_edits(&opts),
         Command::QuickMode(opts) => quick_mode(&mut file, &opts),
-        Command::Streaming => streaming_mode(),
+        Command::Streaming(opts) => streaming_mode(&opts),
     }
 }
