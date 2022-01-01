@@ -355,13 +355,13 @@ fn streaming_mode(opt: &StreamingCmd) -> std::io::Result<()> {
 
 fn osc_listener(addr: &SocketAddrV4, streaming_params: Arc<Mutex<StreamingParams>>) {
     let sock = UdpSocket::bind(addr).unwrap();
-    println!("Listening to {}", addr);
+    println!("OSC: Listening to {}", addr);
 
     let mut buf = [0u8; rosc::decoder::MTU];
 
     loop {
         match sock.recv_from(&mut buf) {
-            Ok((size, addr)) => {
+            Ok((size, _)) => {
                 let packet = rosc::decoder::decode(&buf[..size]).unwrap();
                 match packet {
                     OscPacket::Message(msg) => {
@@ -388,9 +388,6 @@ fn osc_listener(addr: &SocketAddrV4, streaming_params: Arc<Mutex<StreamingParams
         }
     }
 
-}
-
-fn handle_osc_packet(packet: OscPacket) {
 }
 
 fn main() -> std::io::Result<()> {
