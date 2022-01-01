@@ -1,14 +1,14 @@
 pub(crate) mod h264;
 pub(crate) mod h264_iterator;
+pub mod libh264bitstream;
 
 extern crate enum_primitive;
-extern crate libh264bitstream_sys;
 extern crate rand;
 extern crate structopt;
 
 use enum_primitive::*;
 use h264::FrameType;
-use libh264bitstream_sys::*;
+use crate::libh264bitstream::*;
 use std::convert::TryInto;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Write};

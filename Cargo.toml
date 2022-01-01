@@ -3,12 +3,15 @@ name = "movie_parsing"
 version = "0.1.0"
 authors = ["Anton Schirg <anton.schirg@posteo.de>"]
 edition = "2018"
+build = "build.rs"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-libh264bitstream-sys = { path = "../libh264bitstream-sys" }
 enum_primitive = "0.1.1"
 rand = "0.8"
 structopt = "0.3"
 rosc = "0.6"
+
+[build-dependencies]
+bindgen = "*"

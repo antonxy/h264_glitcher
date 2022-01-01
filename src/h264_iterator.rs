@@ -1,7 +1,7 @@
-use crate::h264::FrameType;
-use std::{os::raw::c_int, convert::TryInto};
+use crate::{h264::FrameType, libh264bitstream};
+use std::{convert::TryInto, os::raw::c_int};
 
-use libh264bitstream_sys::{find_nal_unit, h264_stream_t, read_nal_unit};
+use crate::libh264bitstream::{find_nal_unit, h264_stream_t, read_nal_unit};
 
 struct NalIterator<H264Stream: std::io::BufRead> {
     stream: H264Stream,
@@ -55,16 +55,21 @@ where
             };
 
             // create NalItem
-            let h2: *mut h264_stream_t = unsafe { libh264bitstream_sys::h264_new() };
-            let ret =
-                unsafe { read_nal_unit(h2, buf.as_mut_ptr().add(nal_start.try_into().unwrap()), nal_end - nal_start) };
+            let h2: *mut h264_stream_t = unsafe { libh264bitstream::h264_new() };
+            let ret = unsafe {
+                read_nal_unit(
+                    h2,
+                    buf.as_mut_ptr().add(nal_start.try_into().unwrap()),
+                    nal_end - nal_start,
+                )
+            };
             assert_eq!(ret, 0);
 
             let frame_type = unsafe { FrameType::from_sh_slice_type((*(*h2).sh).slice_type) };
 
             let item = Some(Ok(NalItem { frame_type }));
 
-            unsafe { libh264bitstream_sys::h264_free(h2) };
+            unsafe { libh264bitstream::h264_free(h2) };
 
             // consume the space
             self.stream.consume(nal_end.try_into().unwrap());
@@ -80,7 +85,7 @@ mod test {
 
     #[test]
     fn smoke_test() {
-        let file = std::fs::File::open("./bbb.h264").unwrap();
+        let file = std::fs::File::open("./big_buck_bunny.h264").unwrap();
         let file = std::io::BufReader::new(file);
         let it = NalIterator::new(file);
         let items: Vec<_> = it.collect();
