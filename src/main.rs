@@ -86,6 +86,7 @@ enum Command {
     ApplyEditTable(ApplyEditTableCmd),
     ApplyRandomEdits(ApplyRandomEditsCmd),
     QuickMode(QuickModeCmd),
+    Streaming,
 }
 
 #[derive(Debug, StructOpt)]
@@ -323,6 +324,10 @@ fn quick_mode(input_file: &mut File, opt: &QuickModeCmd) -> std::io::Result<()> 
     Ok(())
 }
 
+fn streaming_mode() -> std::io::Result<()> {
+    Ok(())
+}
+
 fn main() -> std::io::Result<()> {
     let opt = Opt::from_args();
     println!("{:?}", opt);
@@ -334,5 +339,6 @@ fn main() -> std::io::Result<()> {
         Command::ApplyEditTable(opts) => apply_edit_table(&mut file, &opts),
         Command::ApplyRandomEdits(opts) => apply_random_edits(&opts),
         Command::QuickMode(opts) => quick_mode(&mut file, &opts),
+        Command::Streaming => streaming_mode(),
     }
 }
