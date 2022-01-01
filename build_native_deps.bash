@@ -6,7 +6,7 @@ set -x
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-export CFLAGS="-fPIC"
+export CFLAGS="-fPIC -g"
 
 pushd deps/h264bitstream
 set +e

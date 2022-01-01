@@ -1,5 +1,5 @@
 use crate::{h264::FrameType, libh264bitstream};
-use std::{convert::TryInto, os::raw::c_int};
+use std::{convert::TryInto, io::BufReader, os::raw::c_int};
 
 use crate::libh264bitstream::{find_nal_unit, h264_stream_t, read_nal_unit};
 
@@ -16,8 +16,10 @@ impl<H264Stream> NalIterator<H264Stream>
 where
     H264Stream: std::io::BufRead,
 {
-    pub fn new(stream: H264Stream) -> Self {
-        NalIterator { stream }
+    pub fn new(stream: H264Stream) -> NalIterator<BufReader<H264Stream>> {
+        NalIterator {
+            stream: BufReader::with_capacity(1 << 20, stream),
+        }
     }
 }
 
@@ -35,24 +37,25 @@ where
             };
 
             // library wants a mut pointer :/
-            let mut v = Vec::new();
+            let mut v = vec![0; buf.len()];
             v.clone_from_slice(buf);
             let mut buf = v;
 
-            let (nal_start, nal_end) = unsafe {
+            let (unit_type, nal_start, nal_end) = unsafe {
                 let mut nal_start: c_int = 0;
                 let mut nal_end: c_int = 0;
-                let ret = find_nal_unit(
+                let unit_type = find_nal_unit(
                     buf.as_mut_ptr(),
                     buf.len().try_into().unwrap(),
                     &mut nal_start,
                     &mut nal_end,
                 );
-                if ret != 0 {
+                if unit_type == -1 {
                     continue; // fill_buf will read more
                 }
-                (nal_start, nal_end)
+                (unit_type, nal_start, nal_end)
             };
+            println!("{} {} {} {:?}", unit_type, nal_start, nal_end, &buf[0..6]);
 
             // create NalItem
             let h2: *mut h264_stream_t = unsafe { libh264bitstream::h264_new() };
@@ -63,7 +66,11 @@ where
                     nal_end - nal_start,
                 )
             };
-            assert_eq!(ret, 0);
+            assert_eq!(
+                ret,
+                nal_end - nal_start,
+                "expecting read_nal_unit to return nal_size"
+            );
 
             let frame_type = unsafe { FrameType::from_sh_slice_type((*(*h2).sh).slice_type) };
 
@@ -74,6 +81,7 @@ where
             // consume the space
             self.stream.consume(nal_end.try_into().unwrap());
 
+            println!("yielding {:?}", item);
             return item;
         }
     }

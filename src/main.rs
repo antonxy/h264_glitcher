@@ -169,11 +169,12 @@ fn create_edit_table(input_file: &mut File, opt: &CreateEditTableCmd) -> std::io
             let nal_start_glob = nal_start + start_offset as i32;
             let nal_end_glob = nal_end + start_offset as i32;
             let nal_size = nal_end - nal_start;
-            read_nal_unit(
+            let ret = read_nal_unit(
                 h2,
                 buf.as_mut_ptr().add(nal_start_glob.try_into().unwrap()),
                 nal_size,
             );
+            assert_eq!(ret, nal_size);
 
             let frame_type = FrameType::from_sh_slice_type((*(*h2).sh).slice_type);
 
