@@ -13,6 +13,7 @@ use enum_primitive::*;
 use structopt::StructOpt;
 use std::str::FromStr;
 use std::vec::Vec;
+use std::io::{Seek, SeekFrom};
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 enum FrameType {
@@ -85,6 +86,7 @@ enum Command {
     CreateEditTable(CreateEditTableCmd),
     ApplyEditTable(ApplyEditTableCmd),
     ApplyRandomEdits(ApplyRandomEditsCmd),
+    QuickMode(QuickModeCmd),
 }
 
 #[derive(Debug, StructOpt)]
@@ -117,6 +119,18 @@ struct ApplyRandomEditsCmd {
 
     #[structopt(short, long, default_value="0")]
     reorder_iframes: usize,
+}
+
+#[derive(Debug, StructOpt)]
+struct QuickModeCmd {
+    #[structopt(short="p", long, default_value="0.0")]
+    iframe_prob: f32,
+
+    #[structopt(short, long, default_value="0")]
+    reorder_iframes: usize,
+
+    #[structopt(short, long, parse(from_os_str))]
+    output: PathBuf,
 }
 
 #[derive(Debug)]
@@ -232,7 +246,7 @@ fn apply_random_edits(opt: & ApplyRandomEditsCmd) -> std::io::Result<()> {
         //}
         let entry_str = line.split("|").next().unwrap();
         let entry = EditTableEntry::from_string(entry_str);
-        let delete_line = entry.iframe && rand::random::<f32>() > opt.iframe_prob && num_iframes > 1;
+        let delete_line = entry.iframe && rand::random::<f32>() > opt.iframe_prob && num_iframes >= 1;
         if entry.iframe {
             num_iframes += 1;
         }
@@ -241,7 +255,7 @@ fn apply_random_edits(opt: & ApplyRandomEditsCmd) -> std::io::Result<()> {
     }
 
     let num_iframes = lines.iter().enumerate().filter(|(_idx, el)| el.entry.iframe && !el.delete_line).count();
-    for _ in 0..opt.reorder_iframes{
+    for _ in 0..opt.reorder_iframes {
         let mut start = lines.iter().enumerate().cycle().filter(|(_idx, el)| el.entry.iframe && !el.delete_line);
         let start_el = start.nth(rand::random::<usize>() % num_iframes).unwrap().0;
         let end_el = start.nth(4).unwrap().0;
@@ -260,6 +274,28 @@ fn apply_random_edits(opt: & ApplyRandomEditsCmd) -> std::io::Result<()> {
     Ok(())
 }
 
+fn quick_mode(input_file : &mut File, opt: & QuickModeCmd) -> std::io::Result<()> {
+    let create_opts = CreateEditTableCmd {
+        edit_table_out : PathBuf::from("/tmp/edtab"),
+        frames: None,
+    };
+    create_edit_table(input_file, &create_opts)?;
+    let rand_ed = ApplyRandomEditsCmd {
+        edit_table_in: PathBuf::from("/tmp/edtab"),
+        edit_table_out: PathBuf::from("/tmp/edtabo"),
+        iframe_prob: opt.iframe_prob,
+        reorder_iframes: opt.reorder_iframes,
+    };
+    apply_random_edits(&rand_ed)?;
+    let apply_cmd = ApplyEditTableCmd {
+        edit_table_in: PathBuf::from("/tmp/edtabo"),
+        output: opt.output.clone(),
+    };
+    input_file.seek(SeekFrom::Start(0))?;
+    apply_edit_table(input_file, &apply_cmd)?;
+    Ok(())
+}
+
 fn main() -> std::io::Result<()> {
     let opt = Opt::from_args();
     println!("{:?}", opt);
@@ -270,6 +306,7 @@ fn main() -> std::io::Result<()> {
         Command::CreateEditTable(opts) => create_edit_table(&mut file, &opts),
         Command::ApplyEditTable(opts) => apply_edit_table(&mut file, &opts),
         Command::ApplyRandomEdits(opts) => apply_random_edits(&opts),
+        Command::QuickMode(opts) => quick_mode(&mut file, &opts),
     }
 
 }
