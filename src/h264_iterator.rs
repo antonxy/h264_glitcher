@@ -3,8 +3,15 @@ use std::{convert::TryInto, io::BufReader, os::raw::c_int};
 
 use crate::libh264bitstream::{find_nal_unit, h264_stream_t, read_nal_unit};
 
+#[derive(PartialEq, Eq, Debug)]
+enum PeekState {
+    FoundItem,
+    Resizing,
+}
+
 struct NalIterator<H264Stream: std::io::BufRead> {
     stream: H264Stream,
+    peek_state: PeekState,
 }
 
 #[derive(Debug)]
@@ -19,6 +26,7 @@ where
     pub fn new(stream: H264Stream) -> NalIterator<BufReader<H264Stream>> {
         NalIterator {
             stream: BufReader::with_capacity(1 << 20, stream),
+            peek_state: PeekState::FoundItem,
         }
     }
 }
@@ -31,6 +39,10 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
+            if self.peek_state == PeekState::Resizing {
+                return None;
+            }
+
             let buf = match self.stream.fill_buf() {
                 Ok(buf) => buf,
                 Err(e) => return Some(Err(e)),
@@ -50,8 +62,16 @@ where
                     &mut nal_start,
                     &mut nal_end,
                 );
-                if unit_type == -1 {
-                    continue; // fill_buf will read more
+                if !(unit_type > 0) {
+                    match self.peek_state {
+                        PeekState::FoundItem => {
+                            self.peek_state = PeekState::Resizing;
+                            continue; // fill_buf will read more,
+                        }
+                        PeekState::Resizing => {
+                            return None;
+                        }
+                    }
                 }
                 (unit_type, nal_start, nal_end)
             };
@@ -82,6 +102,7 @@ where
             self.stream.consume(nal_end.try_into().unwrap());
 
             println!("yielding {:?}", item);
+            self.peek_state = PeekState::FoundItem;
             return item;
         }
     }
