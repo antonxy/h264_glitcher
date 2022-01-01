@@ -362,7 +362,6 @@ fn osc_listener(addr: &SocketAddrV4, streaming_params: Arc<Mutex<StreamingParams
     loop {
         match sock.recv_from(&mut buf) {
             Ok((size, addr)) => {
-                println!("Received packet with size {} from: {}", size, addr);
                 let packet = rosc::decoder::decode(&buf[..size]).unwrap();
                 match packet {
                     OscPacket::Message(msg) => {
