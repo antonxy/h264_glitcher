@@ -14,6 +14,8 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::vec::Vec;
 use structopt::StructOpt;
+use std::thread;
+use std::sync::{Mutex, Arc};
 use std::net::{SocketAddrV4, UdpSocket};
 use rosc::OscPacket;
 
@@ -332,11 +334,26 @@ fn quick_mode(input_file: &mut File, opt: &QuickModeCmd) -> std::io::Result<()> 
     Ok(())
 }
 
+#[derive(Default)]
+struct StreamingParams {
+    fps: f32,
+}
+
+
 fn streaming_mode(opt: &StreamingCmd) -> std::io::Result<()> {
+    let streaming_params = Arc::new(Mutex::new(StreamingParams::default()));
     let addr = match SocketAddrV4::from_str(&opt.listen_addr) {
         Ok(addr) => addr,
         Err(_) => panic!("Invalid listen_addr"),
     };
+    thread::spawn(move || {
+        osc_listener(&addr,streaming_params.clone());
+    });
+    loop {}
+    Ok(())
+}
+
+fn osc_listener(addr: &SocketAddrV4, streaming_params: Arc<Mutex<StreamingParams>>) {
     let sock = UdpSocket::bind(addr).unwrap();
     println!("Listening to {}", addr);
 
@@ -347,7 +364,23 @@ fn streaming_mode(opt: &StreamingCmd) -> std::io::Result<()> {
             Ok((size, addr)) => {
                 println!("Received packet with size {} from: {}", size, addr);
                 let packet = rosc::decoder::decode(&buf[..size]).unwrap();
-                handle_osc_packet(packet);
+                match packet {
+                    OscPacket::Message(msg) => {
+                        match msg.addr.as_str() {
+                            "/fps" => {
+                                let mut params = streaming_params.lock().unwrap();
+                                params.fps = msg.args[0].clone().float().unwrap();
+                            },
+                            _ => {
+                                println!("Unhandled OSC address: {}", msg.addr);
+                                println!("Unhandled OSC arguments: {:?}", msg.args);
+                            }
+                        }
+                    }
+                    OscPacket::Bundle(bundle) => {
+                        println!("OSC Bundle: {:?}", bundle);
+                    }
+                }
             }
             Err(e) => {
                 println!("Error receiving from socket: {}", e);
@@ -355,19 +388,10 @@ fn streaming_mode(opt: &StreamingCmd) -> std::io::Result<()> {
             }
         }
     }
-    Ok(())
+
 }
 
 fn handle_osc_packet(packet: OscPacket) {
-    match packet {
-        OscPacket::Message(msg) => {
-            println!("OSC address: {}", msg.addr);
-            println!("OSC arguments: {:?}", msg.args);
-        }
-        OscPacket::Bundle(bundle) => {
-            println!("OSC Bundle: {:?}", bundle);
-        }
-    }
 }
 
 fn main() -> std::io::Result<()> {
