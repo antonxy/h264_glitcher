@@ -1,6 +1,10 @@
 pub(crate) mod h264;
-pub(crate) mod h264_iterator;
+pub(crate) mod nal_iterator;
+pub(crate) mod parse_nal;
 pub mod libh264bitstream;
+
+use crate::parse_nal::H264Parser;
+use crate::nal_iterator::NalIterator;
 
 extern crate enum_primitive;
 extern crate rand;
@@ -310,28 +314,47 @@ fn quick_mode(input_file: &mut File, opt: &QuickModeCmd) -> std::io::Result<()> 
     Ok(())
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct StreamingParams {
     fps: f32,
 }
 
 
-fn streaming_mode(opt: &StreamingCmd) -> std::io::Result<()> {
+fn streaming_mode(input_file: &mut File, opt: &StreamingCmd) -> std::io::Result<()> {
     let streaming_params = Arc::new(Mutex::new(StreamingParams::default()));
     let addr = match SocketAddrV4::from_str(&opt.listen_addr) {
         Ok(addr) => addr,
         Err(_) => panic!("Invalid listen_addr"),
     };
+
+    let streaming_params_cpy = streaming_params.clone();
     thread::spawn(move || {
-        osc_listener(&addr,streaming_params.clone());
+        osc_listener(&addr, streaming_params_cpy);
     });
-    loop {}
+
+    let stdout = std::io::stdout();
+    let mut handle = stdout.lock();
+
+    let file = std::io::BufReader::new(input_file);
+    let it = NalIterator::new(file);
+    let it = it.map(|x| x.unwrap());
+    //let mut parser = H264Parser::new();
+    //let it = it.map(move |data| {
+    //    let info = parser.parse_nal(&data);
+    //    (data, info)
+    //});
+    for nal_data in it {
+        let streaming_params = streaming_params.lock().unwrap().clone();
+
+        handle.write_all(&[0x00, 0x00, 0x00, 0x01])?;
+        handle.write_all(&nal_data)?;
+    }
     Ok(())
 }
 
 fn osc_listener(addr: &SocketAddrV4, streaming_params: Arc<Mutex<StreamingParams>>) {
     let sock = UdpSocket::bind(addr).unwrap();
-    println!("OSC: Listening to {}", addr);
+    eprintln!("OSC: Listening to {}", addr);
 
     let mut buf = [0u8; rosc::decoder::MTU];
 
@@ -347,18 +370,18 @@ fn osc_listener(addr: &SocketAddrV4, streaming_params: Arc<Mutex<StreamingParams
                                 params.fps = msg.args[0].clone().float().unwrap();
                             },
                             _ => {
-                                println!("Unhandled OSC address: {}", msg.addr);
-                                println!("Unhandled OSC arguments: {:?}", msg.args);
+                                eprintln!("Unhandled OSC address: {}", msg.addr);
+                                eprintln!("Unhandled OSC arguments: {:?}", msg.args);
                             }
                         }
                     }
                     OscPacket::Bundle(bundle) => {
-                        println!("OSC Bundle: {:?}", bundle);
+                        eprintln!("OSC Bundle: {:?}", bundle);
                     }
                 }
             }
             Err(e) => {
-                println!("Error receiving from socket: {}", e);
+                eprintln!("Error receiving from socket: {}", e);
                 break;
             }
         }
@@ -368,7 +391,7 @@ fn osc_listener(addr: &SocketAddrV4, streaming_params: Arc<Mutex<StreamingParams
 
 fn main() -> std::io::Result<()> {
     let opt = Opt::from_args();
-    println!("{:?}", opt);
+    eprintln!("{:?}", opt);
 
     let mut file = File::open(opt.input)?;
 
@@ -377,6 +400,6 @@ fn main() -> std::io::Result<()> {
         Command::ApplyEditTable(opts) => apply_edit_table(&mut file, &opts),
         Command::ApplyRandomEdits(opts) => apply_random_edits(&opts),
         Command::QuickMode(opts) => quick_mode(&mut file, &opts),
-        Command::Streaming(opts) => streaming_mode(&opts),
+        Command::Streaming(opts) => streaming_mode(&mut file, &opts),
     }
 }

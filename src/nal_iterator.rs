@@ -1,6 +1,13 @@
 use std::io::BufReader;
 
-struct NalIterator<H264Stream: std::io::BufRead> {
+//Info on byte stream format
+//https://yumichan.net/video-processing/video-compression/introduction-to-h264-nal-unit/
+
+//Maybe better take u8 Iterator instead of BufRead? is there a peekable iterator with more than one
+//byte lookahead? Is there a buffered version of Read::bytes() ?
+//use itertools multipeek or similar
+
+pub struct NalIterator<H264Stream: std::io::BufRead> {
     stream: H264Stream,
 }
 
@@ -32,7 +39,7 @@ where
 
             //No start found in remaining bytes and no more could be read
             if buf.len() == last_len {
-                return None
+                //return None
             }
             last_len = buf.len();
 
@@ -42,6 +49,7 @@ where
             }
 
             if buf.len() < 3 {
+                println!("buf < 3");
                 continue;
             }
             if buf[0..3] == [0x00, 0x00, 0x01] {
@@ -49,6 +57,7 @@ where
                 break;
             }
             if buf.len() < 4 {
+                println!("buf < 4");
                 continue;
             }
             if buf[0..4] == [0x00, 0x00, 0x00, 0x01] {
@@ -71,9 +80,10 @@ where
             //
             //No start found in remaining bytes and no more could be read
             if buf.len() == last_len {
-                return None
+                //return None
             }
             last_len = buf.len();
+            dbg!(buf.len());
 
             //EOF
             if buf.len() == 0 {
@@ -81,12 +91,14 @@ where
             }
 
             if buf.len() < 3 {
+                println!("buf2 < 3");
                 continue;
             }
             if buf[0..3] == [0x00, 0x00, 0x01] {
                 break;
             }
             if buf.len() < 4 {
+                println!("buf2 < 4");
                 continue;
             }
             if buf[0..4] == [0x00, 0x00, 0x00, 0x01] {
@@ -142,7 +154,6 @@ mod test {
         let file = std::io::BufReader::new(file);
         let it = NalIterator::new(file);
         let items: Vec<_> = it.collect();
-        assert_eq!(items.len(), 18);
-        println!("{:?}", items[0].as_ref().unwrap());
+        assert_eq!(items.len(), 700);
     }
 }
