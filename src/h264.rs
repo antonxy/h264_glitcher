@@ -1,7 +1,7 @@
 use std::os::raw::c_int;
 
 #[derive(Debug, Copy, Clone, PartialEq)]
-pub(crate) enum FrameType {
+pub enum FrameType {
     P,
     B,
     I,

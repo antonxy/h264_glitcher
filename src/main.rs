@@ -30,7 +30,7 @@ use rosc::OscPacket;
 enum_from_primitive! {
     #[derive(Debug, Copy, Clone, PartialEq)]
     #[repr(u8)]
-    enum NALUnitType {
+    pub enum NALUnitType {
         Unpecified = 0,
         CodedSliceNonIdr          = 1,
         CodedSliceDataPartitionA = 2,
@@ -314,9 +314,17 @@ fn quick_mode(input_file: &mut File, opt: &QuickModeCmd) -> std::io::Result<()> 
     Ok(())
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 struct StreamingParams {
     fps: f32,
+}
+
+impl Default for StreamingParams {
+    fn default() -> Self {
+        Self {
+            fps: 30.0,
+        }
+    }
 }
 
 
@@ -336,18 +344,28 @@ fn streaming_mode(input_file: &mut File, opt: &StreamingCmd) -> std::io::Result<
     let mut handle = stdout.lock();
 
     let file = std::io::BufReader::new(input_file);
-    let it = NalIterator::new(file);
-    let it = it.map(|x| x.unwrap());
-    //let mut parser = H264Parser::new();
-    //let it = it.map(move |data| {
-    //    let info = parser.parse_nal(&data);
-    //    (data, info)
-    //});
-    for nal_data in it {
+    let it = NalIterator::new(file.bytes().map(|x| x.unwrap()));
+    let mut parser = H264Parser::new();
+    let it = it.map(move |data| {
+        let info = parser.parse_nal(&data);
+        (data, info)
+    });
+    let mut first_i_frame = true;
+    for (nal_data, info) in it {
         let streaming_params = streaming_params.lock().unwrap().clone();
 
-        handle.write_all(&[0x00, 0x00, 0x00, 0x01])?;
-        handle.write_all(&nal_data)?;
+        if let Some(info) = info {
+            if info.frame_type == FrameType::IOnly && first_i_frame {
+                handle.write_all(&[0x00, 0x00, 0x00, 0x01])?;
+                handle.write_all(&nal_data)?;
+                first_i_frame = false;
+            } else if info.frame_type != FrameType::IOnly {
+                handle.write_all(&[0x00, 0x00, 0x00, 0x01])?;
+                handle.write_all(&nal_data)?;
+            }
+            handle.flush()?;
+            std::thread::sleep_ms((1000.0 / streaming_params.fps) as u32);
+        }
     }
     Ok(())
 }

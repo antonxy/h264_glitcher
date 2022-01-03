@@ -1,159 +1,127 @@
-use std::io::BufReader;
+use std::iter::Iterator;
+use itertools::structs::PeekNth;
+use itertools::peek_nth;
 
 //Info on byte stream format
 //https://yumichan.net/video-processing/video-compression/introduction-to-h264-nal-unit/
 
-//Maybe better take u8 Iterator instead of BufRead? is there a peekable iterator with more than one
-//byte lookahead? Is there a buffered version of Read::bytes() ?
-//use itertools multipeek or similar
+//Iterator seems to work but also seems to be highly inefficient
 
-pub struct NalIterator<H264Stream: std::io::BufRead> {
-    stream: H264Stream,
+pub struct NalIterator<H264Stream: Iterator<Item = u8>>
+{
+    stream: PeekNth<H264Stream>,
 }
 
 impl<H264Stream> NalIterator<H264Stream>
 where
-    H264Stream: std::io::BufRead,
+    H264Stream: Iterator<Item = u8>,
 {
-    pub fn new(stream: H264Stream) -> NalIterator<BufReader<H264Stream>> {
+    pub fn new(stream: H264Stream) -> NalIterator<H264Stream> {
         NalIterator {
-            stream: BufReader::new(stream),
+            stream: peek_nth(stream),
         }
     }
 }
 
+fn peek_n<I: Iterator<Item=u8>>(it: &mut PeekNth<I>, n: usize) -> Vec<u8>
+{
+    (0..n).map(move |i| it.peek_nth(i).map(|x| *x))
+        .take_while(|x| x.is_some())
+        .map(|x| x.unwrap())
+        .collect()
+}
+
 impl<H264Stream> Iterator for NalIterator<H264Stream>
 where
-    H264Stream: std::io::BufRead,
+    H264Stream: Iterator<Item = u8>,
 {
-    type Item = std::io::Result<Vec<u8>>;
+    type Item = Vec<u8>;
 
     fn next(&mut self) -> Option<Self::Item> {
         // Find nal start (0x000001 or 0x00000001)
         let mut last_len = 0;
         loop {
-            let buf = match self.stream.fill_buf() {
-                Ok(buf) => buf,
-                Err(e) => return Some(Err(e)),
-            };
-
-            //No start found in remaining bytes and no more could be read
-            if buf.len() == last_len {
-                //return None
-            }
-            last_len = buf.len();
-
-            //EOF
-            if buf.len() == 0 {
-                return None;
-            }
-
-            if buf.len() < 3 {
-                println!("buf < 3");
-                continue;
-            }
-            if buf[0..3] == [0x00, 0x00, 0x01] {
-                self.stream.consume(3);
+            if peek_n(&mut self.stream, 3) == [0x00, 0x00, 0x01] {
+                if self.stream.nth(2).is_none() { //advance
+                    return None
+                }
                 break;
             }
-            if buf.len() < 4 {
-                println!("buf < 4");
-                continue;
-            }
-            if buf[0..4] == [0x00, 0x00, 0x00, 0x01] {
-                self.stream.consume(4);
+            if peek_n(&mut self.stream, 4) == [0x00, 0x00, 0x00, 0x01] {
+                if self.stream.nth(3).is_none() { //advance
+                    return None
+                }
                 break;
             }
-            self.stream.consume(1);
+            if self.stream.next().is_none() {
+                return None
+            }
         }
 
-        let mut nal_data = Vec::new();
+        let mut nal_data = Vec::<u8>::new();
 
         // Find nal end (start of next nal) (0x000001 or 0x00000001)
         // Put to puffer while searching
         let mut last_len = 0;
         loop {
-            let buf = match self.stream.fill_buf() {
-                Ok(buf) => buf,
-                Err(e) => return Some(Err(e)),
-            };
-            //
-            //No start found in remaining bytes and no more could be read
-            if buf.len() == last_len {
-                //return None
-            }
-            last_len = buf.len();
-            dbg!(buf.len());
-
-            //EOF
-            if buf.len() == 0 {
-                return None;
-            }
-
-            if buf.len() < 3 {
-                println!("buf2 < 3");
-                continue;
-            }
-            if buf[0..3] == [0x00, 0x00, 0x01] {
+            if peek_n(&mut self.stream, 3) == [0x00, 0x00, 0x01] {
                 break;
             }
-            if buf.len() < 4 {
-                println!("buf2 < 4");
-                continue;
-            }
-            if buf[0..4] == [0x00, 0x00, 0x00, 0x01] {
+            if peek_n(&mut self.stream, 4) == [0x00, 0x00, 0x00, 0x01] {
                 break;
             }
-            nal_data.push(buf[0]);
-            self.stream.consume(1);
+            match self.stream.next() {
+                Some(x) => nal_data.push(x),
+                None => return None,
+            }
         }
 
-        Some(Ok(nal_data))
+        Some(nal_data)
     }
 }
 
 #[cfg(test)]
 mod test {
     use super::NalIterator;
-
+    use std::io::Read;
     #[test]
     fn test_short_head() {
-        let data : &[u8] = &[0xaa, 0xaa, 0x00, 0x00, 0x01, 0xbb, 0xbb, 0xbb, 0x00, 0x00, 0x01][..];
-        let it = NalIterator::new(data);
+        let data : Vec<u8> = vec![0xaa, 0xaa, 0x00, 0x00, 0x01, 0xbb, 0xbb, 0xbb, 0x00, 0x00, 0x01];
+        let it = NalIterator::new(data.into_iter());
         let items: Vec<_> = it.collect();
         assert_eq!(items.len(), 1);
         let packet : &[u8] = &[0xbb, 0xbb, 0xbb][..];
-        assert_eq!(items[0].as_ref().unwrap(), packet);
+        assert_eq!(items[0], packet);
     }
 
     #[test]
     fn test_long_head() {
-        let data : &[u8] = &[0xaa, 0xaa, 0x00, 0x00, 0x00, 0x01, 0xbb, 0xbb, 0xbb, 0x00, 0x00, 0x00, 0x01][..];
-        let it = NalIterator::new(data);
+        let data : Vec<u8> = vec![0xaa, 0xaa, 0x00, 0x00, 0x00, 0x01, 0xbb, 0xbb, 0xbb, 0x00, 0x00, 0x00, 0x01];
+        let it = NalIterator::new(data.into_iter());
         let items: Vec<_> = it.collect();
         assert_eq!(items.len(), 1);
         let packet : &[u8] = &[0xbb, 0xbb, 0xbb][..];
-        assert_eq!(items[0].as_ref().unwrap(), packet);
+        assert_eq!(items[0], packet);
     }
 
     #[test]
     fn test_multiple() {
-        let data : &[u8] = &[0xaa, 0xaa, 0x00, 0x00, 0x01, 0xbb, 0xbb, 0xbb, 0x00, 0x00, 0x01, 0xbb, 0xbb, 0xcc, 0x00, 0x00, 0x01][..];
-        let it = NalIterator::new(data);
+        let data : Vec<u8>= vec![0xaa, 0xaa, 0x00, 0x00, 0x01, 0xbb, 0xbb, 0xbb, 0x00, 0x00, 0x01, 0xbb, 0xbb, 0xcc, 0x00, 0x00, 0x01];
+        let it = NalIterator::new(data.into_iter());
         let items: Vec<_> = it.collect();
         assert_eq!(items.len(), 2);
         let packet : &[u8] = &[0xbb, 0xbb, 0xbb][..];
-        assert_eq!(items[0].as_ref().unwrap(), packet);
+        assert_eq!(items[0], packet);
         let packet : &[u8] = &[0xbb, 0xbb, 0xcc][..];
-        assert_eq!(items[1].as_ref().unwrap(), packet);
+        assert_eq!(items[1], packet);
     }
 
     #[test]
     fn smoke_test() {
         let file = std::fs::File::open("./big_buck_bunny.h264").unwrap();
         let file = std::io::BufReader::new(file);
-        let it = NalIterator::new(file);
+        let it = NalIterator::new(file.bytes().map(|x| x.unwrap()));
         let items: Vec<_> = it.collect();
-        assert_eq!(items.len(), 700);
+        assert_eq!(items.len(), 787);
     }
 }
