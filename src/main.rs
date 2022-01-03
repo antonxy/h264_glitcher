@@ -117,6 +117,7 @@ struct QuickModeCmd {
 }
 
 #[derive(Debug, StructOpt)]
+#[structopt(name = "streaming mode", about = "Live controllable mode", long_about="Pipe output into 'mpv --untimed --no-cache -'. Can be controlled using OSC.")]
 struct StreamingCmd {
     #[structopt(short = "l", long, default_value = "0.0.0.0:8000")]
     listen_addr: String,
@@ -317,12 +318,18 @@ fn quick_mode(input_file: &mut File, opt: &QuickModeCmd) -> std::io::Result<()> 
 #[derive(Clone)]
 struct StreamingParams {
     fps: f32,
+    record_loop: bool,
+    clear_loop: bool,
+    pass_iframe: bool,
 }
 
 impl Default for StreamingParams {
     fn default() -> Self {
         Self {
             fps: 30.0,
+            record_loop: false,
+            clear_loop: false,
+            pass_iframe: false,
         }
     }
 }
@@ -343,6 +350,13 @@ fn streaming_mode(input_file: &mut File, opt: &StreamingCmd) -> std::io::Result<
     let stdout = std::io::stdout();
     let mut handle = stdout.lock();
 
+    let mut write_frame = move |data : &[u8]| -> std::io::Result<()> {
+        handle.write_all(&[0x00, 0x00, 0x00, 0x01])?;
+        handle.write_all(data)?;
+        handle.flush()?;
+        Ok(())
+    };
+
     let file = std::io::BufReader::new(input_file);
     let it = NalIterator::new(file.bytes().map(|x| x.unwrap()));
     let mut parser = H264Parser::new();
@@ -350,22 +364,40 @@ fn streaming_mode(input_file: &mut File, opt: &StreamingCmd) -> std::io::Result<
         let info = parser.parse_nal(&data);
         (data, info)
     });
+
+
     let mut first_i_frame = true;
+    let mut loop_buf = Vec::<Vec<u8>>::new();
+    let mut loop_i = 0;
+
     for (nal_data, info) in it {
-        let streaming_params = streaming_params.lock().unwrap().clone();
+        let params = streaming_params.lock().unwrap().clone();
+
+        while loop_buf.len() > 0 && !params.record_loop {
+            if loop_i >= loop_buf.len() {
+                loop_i = 0;
+            }
+            write_frame(&loop_buf[loop_i])?;
+            loop_i += 1;
+            let params = streaming_params.lock().unwrap().clone();
+            if params.clear_loop {
+                loop_buf.clear();
+            }
+            std::thread::sleep_ms((1000.0 / params.fps) as u32);
+        }
 
         if let Some(info) = info {
             if info.frame_type == FrameType::IOnly && first_i_frame {
-                handle.write_all(&[0x00, 0x00, 0x00, 0x01])?;
-                handle.write_all(&nal_data)?;
+                write_frame(&nal_data)?;
                 first_i_frame = false;
-            } else if info.frame_type != FrameType::IOnly {
-                handle.write_all(&[0x00, 0x00, 0x00, 0x01])?;
-                handle.write_all(&nal_data)?;
+            } else if info.frame_type != FrameType::IOnly || params.pass_iframe {
+                write_frame(&nal_data)?;
+                if params.record_loop {
+                    loop_buf.push(nal_data);
+                }
             }
-            handle.flush()?;
-            std::thread::sleep_ms((1000.0 / streaming_params.fps) as u32);
         }
+        std::thread::sleep_ms((1000.0 / params.fps) as u32);
     }
     Ok(())
 }
@@ -380,12 +412,21 @@ fn osc_listener(addr: &SocketAddrV4, streaming_params: Arc<Mutex<StreamingParams
         match sock.recv_from(&mut buf) {
             Ok((size, _)) => {
                 let packet = rosc::decoder::decode(&buf[..size]).unwrap();
+                let mut params = streaming_params.lock().unwrap();
                 match packet {
                     OscPacket::Message(msg) => {
                         match msg.addr.as_str() {
                             "/fps" => {
-                                let mut params = streaming_params.lock().unwrap();
                                 params.fps = msg.args[0].clone().float().unwrap();
+                            },
+                            "/record_loop" => {
+                                params.record_loop = msg.args[0].clone().bool().unwrap();
+                            },
+                            "/clear_loop" => {
+                                params.clear_loop = msg.args[0].clone().bool().unwrap();
+                            },
+                            "/pass_iframe" => {
+                                params.pass_iframe = msg.args[0].clone().bool().unwrap();
                             },
                             _ => {
                                 eprintln!("Unhandled OSC address: {}", msg.addr);
