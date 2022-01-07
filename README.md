@@ -4,6 +4,10 @@ Creates glitch effects in H.264 encoded videos by removing keyframes, combining 
 
 Can be controlled via OSC.
 
+
+https://user-images.githubusercontent.com/4194320/148616193-57d7ca6b-afb8-4751-b33e-0c5017b6872c.mp4
+
+
 ## Prepare Videos
 
 Use ffmpeg to convert the videos to a raw h264 stream
@@ -15,7 +19,7 @@ It can also be helpful encode all input videos the same way, otherwise transitio
 These settings have an effect on the glitch effects look in general and could probably be optimized still.
 They also have an effect on how likely mpv is to lock up when switching videos.
 ```
-ffmpeg -i $f -c:v libx264 -vf format=yuv420p -vf scale=1920:1080 -qp 30 ../videos_conv_lq/(basename $f .mp4).h264
+ffmpeg -i video.mp4 -c:v libx264 -vf format=yuv420p -vf scale=1920:1080 -qp 30 video.h264
 ```
 
 Other potentially interesting parameters:
