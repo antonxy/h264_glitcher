@@ -164,7 +164,13 @@ fn main() -> std::io::Result<()> {
 
         } else {
             // Play from file
-            let (data, info) = h264_iter.next().unwrap(); //TODO loop video at end
+            let mut frame = h264_iter.next();
+            // Restart video if at end
+            if frame.is_none() {
+                h264_iter = open_h264_file(&opt.input[params.video_num])?;
+                frame = h264_iter.next();
+            }
+            let (data, info) = frame.unwrap();
             if info.map_or(false, |x| x.frame_type != FrameType::IOnly || params.pass_iframe) {
                 write_frame(&data)?;
                 if params.record_loop {
