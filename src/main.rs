@@ -12,11 +12,8 @@ extern crate structopt;
 
 use enum_primitive::*;
 use h264::FrameType;
-use crate::libh264bitstream::*;
-use std::convert::TryInto;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Read, Write};
-use std::os::raw::c_int;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::vec::Vec;
@@ -69,6 +66,7 @@ struct StreamingParams {
     record_loop: bool,
     clear_loop: bool,
     pass_iframe: bool,
+    video_num: usize,
 }
 
 impl Default for StreamingParams {
@@ -78,6 +76,7 @@ impl Default for StreamingParams {
             record_loop: false,
             clear_loop: false,
             pass_iframe: false,
+            video_num: 0,
         }
     }
 }
@@ -114,44 +113,62 @@ fn main() -> std::io::Result<()> {
         Ok(())
     };
 
-    let input_file = File::open(&opt.input[0])?;
-    let file = std::io::BufReader::new(input_file);
-    let it = NalIterator::new(file.bytes().map(|x| x.unwrap()));
-    let mut parser = H264Parser::new();
-    let it = it.map(move |data| {
-        let info = parser.parse_nal(&data);
-        (data, info)
-    });
+    let open_h264_file = |path| -> std::io::Result<_> {
+        let input_file = File::open(path)?;
+        let file = std::io::BufReader::new(input_file);
+        let it = NalIterator::new(file.bytes().map(|x| x.unwrap()));
+        let mut parser = H264Parser::new();
+        let it = it.map(move |data| {
+            let info = parser.parse_nal(&data);
+            (data, info)
+        });
+        Ok(it)
+    };
+
+    let mut h264_iter = open_h264_file(&opt.input[0])?;
+    let mut current_video_num = 0;
+
+    // Write out at least one I-frame
+    loop {
+        let (data, info) = h264_iter.next().unwrap();
+        write_frame(&data)?;
+        if info.map_or(false, |x| x.frame_type == FrameType::IOnly) {
+            break;
+        }
+    }
 
 
-    let mut first_i_frame = true;
     let mut loop_buf = Vec::<Vec<u8>>::new();
     let mut loop_i = 0;
 
-    for (nal_data, info) in it {
+    loop {
         let params = streaming_params.lock().unwrap().clone();
 
-        while loop_buf.len() > 0 && !params.record_loop {
+        // Switch video if requested
+        if current_video_num != params.video_num {
+            h264_iter = open_h264_file(&opt.input[params.video_num])?;
+            current_video_num = params.video_num;
+        }
+
+        if params.clear_loop {
+            loop_buf.clear();
+        }
+
+        if loop_buf.len() > 0 && !params.record_loop {
+            // Play from loop
             if loop_i >= loop_buf.len() {
                 loop_i = 0;
             }
             write_frame(&loop_buf[loop_i])?;
             loop_i += 1;
-            let params = streaming_params.lock().unwrap().clone();
-            if params.clear_loop {
-                loop_buf.clear();
-            }
-            std::thread::sleep_ms((1000.0 / params.fps) as u32);
-        }
 
-        if let Some(info) = info {
-            if info.frame_type == FrameType::IOnly && first_i_frame {
-                write_frame(&nal_data)?;
-                first_i_frame = false;
-            } else if info.frame_type != FrameType::IOnly || params.pass_iframe {
-                write_frame(&nal_data)?;
+        } else {
+            // Play from file
+            let (data, info) = h264_iter.next().unwrap(); //TODO loop video at end
+            if info.map_or(false, |x| x.frame_type != FrameType::IOnly || params.pass_iframe) {
+                write_frame(&data)?;
                 if params.record_loop {
-                    loop_buf.push(nal_data);
+                    loop_buf.push(data);
                 }
             }
         }
@@ -185,6 +202,9 @@ fn osc_listener(addr: &SocketAddrV4, streaming_params: Arc<Mutex<StreamingParams
                             },
                             "/pass_iframe" => {
                                 params.pass_iframe = msg.args[0].clone().bool().unwrap();
+                            },
+                            "/video_num" => {
+                                params.video_num = msg.args[0].clone().int().unwrap() as usize;
                             },
                             _ => {
                                 eprintln!("Unhandled OSC address: {}", msg.addr);
