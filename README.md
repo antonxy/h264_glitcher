@@ -19,11 +19,14 @@ It can also be helpful encode all input videos the same way, otherwise transitio
 These settings have an effect on the glitch effects look in general and could probably be optimized still.
 They also have an effect on how likely mpv is to lock up when switching videos.
 ```
-ffmpeg -i video.mp4 -c:v libx264 -vf format=yuv420p -vf scale=1920:1080 -qp 30 video.h264
+ffmpeg -i video.mp4 -c:v libx264 -vf format=yuv420p,scale=1920:1080 -qp 30 -x264-params bframes=0:refs=1:g=9999999 video.h264
 ```
 
-Other potentially interesting parameters:
-- `-x264-params bframes=0:refs=1` Disable B-frames and allow max 1 reference frames for p-frames
+[libx264 options](https://code.videolan.org/videolan/x264/-/blob/19856cc41ad11e434549fb3cc6a019e645ce1efe/common/base.c#L952)
+Potentially interesting parameters:
+- `bframes=0` Disable B-frames
+- `refs=1` allow max 1 reference frames for p-frames
+- `g=9999999` No keyframes inbetween
 
 ## Run glitcher
 ```
