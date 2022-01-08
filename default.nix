@@ -7,5 +7,5 @@ in pkgs.mkShell rec {
     pkgs.libtool
     pkgs.llvmPackages.clang
   ];
-  LIBCLANG_PATH = "${pkgs.llvmPackages.libclang}/lib";
+  LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
 }
