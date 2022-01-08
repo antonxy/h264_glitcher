@@ -1,5 +1,4 @@
 use crate::{h264::FrameType, NALUnitType, libh264bitstream};
-use std::{convert::TryInto, os::raw::c_int};
 use crate::enum_primitive::FromPrimitive;
 
 use crate::libh264bitstream::{h264_stream_t, read_nal_unit};

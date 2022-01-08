@@ -165,6 +165,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b919933a397b79c37e33b77bb2aa3dc8eb6e165ad809e58ff75bc7db2e34574"
 
 [[package]]
+name = "h264_glitcher"
+version = "0.1.0"
+dependencies = [
+ "bindgen",
+ "enum_primitive",
+ "itertools",
+ "rand",
+ "rosc",
+ "structopt",
+]
+
+[[package]]
 name = "heck"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -245,18 +257,6 @@ name = "minimal-lexical"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
-
-[[package]]
-name = "movie_parsing"
-version = "0.1.0"
-dependencies = [
- "bindgen",
- "enum_primitive",
- "itertools",
- "rand",
- "rosc",
- "structopt",
-]
 
 [[package]]
 name = "nom"

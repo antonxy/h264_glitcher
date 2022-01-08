@@ -1,5 +1,5 @@
 [package]
-name = "movie_parsing"
+name = "h264_glitcher"
 version = "0.1.0"
 authors = ["Anton Schirg <anton.schirg@posteo.de>"]
 edition = "2018"

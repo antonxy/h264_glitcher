@@ -39,7 +39,6 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         // Find nal start (0x000001 or 0x00000001)
-        let mut last_len = 0;
         loop {
             if peek_n(&mut self.stream, 3) == [0x00, 0x00, 0x01] {
                 if self.stream.nth(2).is_none() { //advance
@@ -62,7 +61,6 @@ where
 
         // Find nal end (start of next nal) (0x000001 or 0x00000001)
         // Put to puffer while searching
-        let mut last_len = 0;
         loop {
             if peek_n(&mut self.stream, 3) == [0x00, 0x00, 0x01] {
                 break;
