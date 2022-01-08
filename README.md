@@ -47,3 +47,8 @@ By default the glitcher listens on port 8000 for OSC messages.
 
 - Fluid speed control, turntable style
 - Video selection UI with thumbnails, groups of videos
+- Recurse directories as input
+
+### Todos
+
+- Find out why video sometimes stutters when switching

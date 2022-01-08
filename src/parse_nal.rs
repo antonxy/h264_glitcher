@@ -1,9 +1,9 @@
-use crate::{h264::FrameType, NALUnitType, libh264bitstream};
-use crate::enum_primitive::FromPrimitive;
+use crate::{h264::FrameType, h264::NALUnitType, libh264bitstream};
+use enum_primitive::FromPrimitive;
 
 use crate::libh264bitstream::{h264_stream_t, read_nal_unit};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct NalItem {
     pub nal_unit_type: NALUnitType,
     pub frame_type: FrameType,
@@ -54,9 +54,6 @@ impl Drop for H264Parser {
 }
 
 mod test {
-    use std::io::Read;
-    use crate::parse_nal::H264Parser;
-    use crate::nal_iterator::NalIterator;
     #[test]
     fn smoke_test() {
         let file = std::fs::File::open("./big_buck_bunny.h264").unwrap();

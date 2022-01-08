@@ -6,11 +6,8 @@ pub mod libh264bitstream;
 use crate::parse_nal::H264Parser;
 use crate::nal_iterator::NalIterator;
 
-extern crate enum_primitive;
-extern crate rand;
 extern crate structopt;
 
-use enum_primitive::*;
 use h264::FrameType;
 use std::fs::File;
 use std::io::{Read, Write};
@@ -22,32 +19,6 @@ use std::thread;
 use std::sync::{Mutex, Arc};
 use std::net::{SocketAddrV4, UdpSocket};
 use rosc::OscPacket;
-
-enum_from_primitive! {
-    #[derive(Debug, Copy, Clone, PartialEq)]
-    #[repr(u8)]
-    pub enum NALUnitType {
-        Unpecified = 0,
-        CodedSliceNonIdr          = 1,
-        CodedSliceDataPartitionA = 2,
-        CodedSliceDataPartitionB = 3,
-        CodedSliceDataPartitionC = 4,
-        CodedSliceIdr              = 5,
-        Sei                          = 6,
-        Sps                          = 7,
-        Pps                          = 8,
-        Aud                          = 9,
-        EndOfSequence              = 10,
-        EndOfStream                = 11,
-        Filler                       = 12,
-        SpsExt                      = 13,
-        PrefixNal                   = 14,
-        SubsetSps                   = 15,
-        Dps                          = 16,
-        CodedSliceAux              = 19,
-        CodedSliceSvcExtension    = 20,
-    }
-}
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "h264_glitcher", about = "Live controllable h264 glitcher.",
@@ -81,13 +52,13 @@ impl Default for StreamingParams {
     }
 }
 
-
 fn main() -> std::io::Result<()> {
     let opt = Opt::from_args();
     eprintln!("{:?}", opt);
 
+    let paths : Vec<PathBuf> = opt.input.into_iter().filter(|p| p.is_file()).collect();
     // Check if all files can be opened
-    for path in &opt.input {
+    for path in &paths {
         File::open(path)?;
     }
 
@@ -114,6 +85,7 @@ fn main() -> std::io::Result<()> {
     };
 
     let open_h264_file = |path| -> std::io::Result<_> {
+        eprintln!("Open file {:?}", path);
         let input_file = File::open(path)?;
         let file = std::io::BufReader::new(input_file);
         let it = NalIterator::new(file.bytes().map(|x| x.unwrap()));
@@ -125,7 +97,7 @@ fn main() -> std::io::Result<()> {
         Ok(it)
     };
 
-    let mut h264_iter = open_h264_file(&opt.input[0])?;
+    let mut h264_iter = open_h264_file(&paths[0])?;
     let mut current_video_num = 0;
 
     // Write out at least one I-frame
@@ -145,8 +117,8 @@ fn main() -> std::io::Result<()> {
         let params = streaming_params.lock().unwrap().clone();
 
         // Switch video if requested
-        if current_video_num != params.video_num {
-            h264_iter = open_h264_file(&opt.input[params.video_num])?;
+        if current_video_num != params.video_num && params.video_num < paths.len() {
+            h264_iter = open_h264_file(&paths[params.video_num])?;
             current_video_num = params.video_num;
         }
 
@@ -167,7 +139,7 @@ fn main() -> std::io::Result<()> {
             let mut frame = h264_iter.next();
             // Restart video if at end
             if frame.is_none() {
-                h264_iter = open_h264_file(&opt.input[params.video_num])?;
+                h264_iter = open_h264_file(&paths[current_video_num])?;
                 frame = h264_iter.next();
             }
             let (data, info) = frame.unwrap();
