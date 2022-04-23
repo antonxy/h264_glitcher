@@ -109,7 +109,7 @@ fn main() -> std::io::Result<()> {
     let open_h264_file = |path| -> std::io::Result<_> {
         eprintln!("Open file {:?}", path);
         let input_file = File::open(path)?;
-        let file = std::io::BufReader::new(input_file);
+        let file = std::io::BufReader::with_capacity(1<<20, input_file);
         let it = NalIterator::new(file.bytes().map(|x| x.unwrap()));
         let mut parser = H264Parser::new();
         let it = it.map(move |data| {
@@ -145,6 +145,10 @@ fn main() -> std::io::Result<()> {
 
         loop_helper.set_target_rate(params.fps);
         loop_helper.loop_start();
+
+        if let Some(fps) = loop_helper.report_rate() {
+            eprintln!("FPS: {}", fps);
+        }
 
         // Switch video if requested
         if current_video_num != params.video_num && params.video_num < paths.len() {
