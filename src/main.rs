@@ -17,8 +17,9 @@ use std::vec::Vec;
 use structopt::StructOpt;
 use std::thread;
 use std::sync::{Mutex, Arc};
-use std::net::{SocketAddrV4, UdpSocket};
-use rosc::OscPacket;
+use std::net::{SocketAddr, UdpSocket};
+use rosc::{OscPacket, OscMessage, encoder, OscType};
+
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "h264_glitcher", about = "Live controllable h264 glitcher.",
@@ -29,6 +30,8 @@ struct Opt {
 
     #[structopt(short = "l", long, default_value = "0.0.0.0:8000", help="OSC listen address")]
     listen_addr: String,
+    #[structopt(short = "l", long, default_value = "0.0.0.0:8001", help="OSC send address")]
+    send_addr: String,
 }
 
 #[derive(Clone)]
@@ -38,6 +41,7 @@ struct StreamingParams {
     clear_loop: bool,
     pass_iframe: bool,
     video_num: usize,
+    client_addr: Option<SocketAddr>,
 }
 
 impl Default for StreamingParams {
@@ -48,6 +52,7 @@ impl Default for StreamingParams {
             clear_loop: false,
             pass_iframe: false,
             video_num: 0,
+            client_addr: None,
         }
     }
 }
@@ -65,13 +70,22 @@ fn main() -> std::io::Result<()> {
     let streaming_params = Arc::new(Mutex::new(StreamingParams::default()));
 
     // Run OSC listener
-    let addr = match SocketAddrV4::from_str(&opt.listen_addr) {
+    let addr = match SocketAddr::from_str(&opt.listen_addr) {
+        Ok(addr) => addr,
+        Err(_) => panic!("Invalid listen_addr"),
+    };
+    let send_from_addr = match SocketAddr::from_str(&opt.send_addr) {
         Ok(addr) => addr,
         Err(_) => panic!("Invalid listen_addr"),
     };
     let streaming_params_cpy = streaming_params.clone();
     thread::spawn(move || {
         osc_listener(&addr, streaming_params_cpy);
+    });
+    let streaming_params_cpy = streaming_params.clone();
+    let paths_cpy = paths.clone();
+    thread::spawn(move || {
+        video_name_sender(&send_from_addr, streaming_params_cpy, paths_cpy);
     });
 
     let stdout = std::io::stdout();
@@ -154,8 +168,34 @@ fn main() -> std::io::Result<()> {
     }
     Ok(())
 }
+fn video_name_sender(addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>, paths: Vec<PathBuf>) {
+    let send_sock = UdpSocket::bind(addr).unwrap();
 
-fn osc_listener(addr: &SocketAddrV4, streaming_params: Arc<Mutex<StreamingParams>>) {
+    loop {
+        if let Some(client_addr) = streaming_params.lock().unwrap().client_addr {
+            let mut i = 5;
+            for path in &paths {
+                let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
+                    addr: format!("/label{}", i).to_string(),
+                    args: vec![OscType::String(path.file_name().unwrap().to_str().unwrap().to_string())],
+                })).unwrap();
+                send_sock.send_to(&msg_buf, client_addr).unwrap();
+                i += 1;
+            }
+            for j in i..54+(54-5)*2+1 {
+                let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
+                    addr: format!("/label{}", j).to_string(),
+                    args: vec![OscType::String("N/A".to_string())],
+                })).unwrap();
+                send_sock.send_to(&msg_buf, client_addr).unwrap();
+            }
+        }
+        std::thread::sleep_ms(1000);
+    }
+
+}
+
+fn osc_listener(addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>) {
     let sock = UdpSocket::bind(addr).unwrap();
     eprintln!("OSC: Listening to {}", addr);
 
@@ -163,9 +203,10 @@ fn osc_listener(addr: &SocketAddrV4, streaming_params: Arc<Mutex<StreamingParams
 
     loop {
         match sock.recv_from(&mut buf) {
-            Ok((size, _)) => {
+            Ok((size, client_addr)) => {
                 let packet = rosc::decoder::decode(&buf[..size]).unwrap();
                 let mut params = streaming_params.lock().unwrap();
+                params.client_addr = Some(client_addr);
                 match packet {
                     OscPacket::Message(msg) => {
                         match msg.addr.as_str() {
