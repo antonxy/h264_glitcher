@@ -169,7 +169,7 @@ fn main() -> std::io::Result<()> {
     Ok(())
 }
 
-const PALETTE : &'static [&'static str] = &["#EF476F", "#FFD166", "#06D6A0", "#118AB2", "#073B4C"];
+const PALETTE : &'static [&'static str] = &["EF476FFF", "FFD166FF", "06D6A0FF", "118AB2FF", "aa1d97ff"];
 
 fn video_name_sender(addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>, paths: Vec<PathBuf>) {
     let send_sock = UdpSocket::bind(addr).unwrap();
@@ -193,11 +193,11 @@ fn video_name_sender(addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingPar
                 let filename = path.file_stem().unwrap().to_str().unwrap().to_string();
 
                 // Select new color per directory
-                let color = PALETTE[color_idx];
                 if last_dir != dir {
                     last_dir = dir;
                     color_idx = (color_idx + 1) % PALETTE.len();
                 }
+                let color = PALETTE[color_idx];
 
                 let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
                     addr: format!("/label{}", i).to_string(),
