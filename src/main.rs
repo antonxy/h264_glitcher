@@ -25,7 +25,7 @@ use rosc::{OscPacket, OscMessage, encoder, OscType};
 #[structopt(name = "h264_glitcher", about = "Live controllable h264 glitcher.",
             long_about = "Pipe output into 'mpv --untimed --no-cache -'.")]
 struct Opt {
-    #[structopt(short, long, parse(from_os_str), required=true, help="Input video file(s)")]
+    #[structopt(short, long, parse(from_os_str), required=true, help="Input video file(s). Directories will be ignored.")]
     input: Vec<PathBuf>,
 
     #[structopt(short = "l", long, default_value = "0.0.0.0:8000", help="OSC listen address")]
@@ -168,22 +168,40 @@ fn main() -> std::io::Result<()> {
     }
     Ok(())
 }
+
+const PALETTE : &'static [&'static str] = &["#EF476F", "#FFD166", "#06D6A0", "#118AB2", "#073B4C"];
+
 fn video_name_sender(addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>, paths: Vec<PathBuf>) {
     let send_sock = UdpSocket::bind(addr).unwrap();
 
     loop {
         let params = streaming_params.lock().unwrap().clone();
         if let Some(client_addr) = params.client_addr {
+            // Send FPS
             let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
                 addr: "/fps".to_string(),
                 args: vec![OscType::Float(params.fps)],
             })).unwrap();
             send_sock.send_to(&msg_buf, client_addr).unwrap();
+
+            // Send video labels
             let mut i = 5;
+            let mut last_dir = None;
+            let mut color_idx = 0;
             for path in &paths {
+                let dir = path.parent();
+                let filename = path.file_stem().unwrap().to_str().unwrap().to_string();
+
+                // Select new color per directory
+                let color = PALETTE[color_idx];
+                if last_dir != dir {
+                    last_dir = dir;
+                    color_idx = (color_idx + 1) % PALETTE.len();
+                }
+
                 let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
                     addr: format!("/label{}", i).to_string(),
-                    args: vec![OscType::String(path.file_name().unwrap().to_str().unwrap().to_string())],
+                    args: vec![OscType::String(filename), OscType::String(color.to_string())],
                 })).unwrap();
                 send_sock.send_to(&msg_buf, client_addr).unwrap();
                 i += 1;
@@ -191,7 +209,7 @@ fn video_name_sender(addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingPar
             for j in i..54+(54-5)*2+1 {
                 let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
                     addr: format!("/label{}", j).to_string(),
-                    args: vec![OscType::String("N/A".to_string())],
+                    args: vec![OscType::String("N/A".to_string()), OscType::String("#000000".to_string())],
                 })).unwrap();
                 send_sock.send_to(&msg_buf, client_addr).unwrap();
             }
