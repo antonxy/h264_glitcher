@@ -34,11 +34,12 @@ struct Opt {
     send_addr: String,
 }
 
+
 #[derive(Clone)]
 struct StreamingParams {
     fps: f32,
     record_loop: bool,
-    clear_loop: bool,
+    play_loop: bool,
     pass_iframe: bool,
     video_num: usize,
     client_addr: Option<SocketAddr>,
@@ -49,7 +50,7 @@ impl Default for StreamingParams {
         Self {
             fps: 30.0,
             record_loop: false,
-            clear_loop: false,
+            play_loop: false,
             pass_iframe: false,
             video_num: 0,
             client_addr: None,
@@ -82,11 +83,17 @@ fn main() -> std::io::Result<()> {
     thread::spawn(move || {
         osc_listener(&addr, streaming_params_cpy);
     });
+
+    let send_sock = UdpSocket::bind(send_from_addr).unwrap();
+    let send_sock = Arc::new(Mutex::new(send_sock));
+
     let streaming_params_cpy = streaming_params.clone();
     let paths_cpy = paths.clone();
-    thread::spawn(move || {
-        video_name_sender(&send_from_addr, streaming_params_cpy, paths_cpy);
-    });
+    thread::spawn({
+        let send_sock  = Arc::clone(&send_sock);
+        move || {
+        video_name_sender(send_sock, streaming_params_cpy, paths_cpy);
+    }});
 
     let stdout = std::io::stdout();
     let mut handle = stdout.lock();
@@ -126,9 +133,10 @@ fn main() -> std::io::Result<()> {
 
     let mut loop_buf = Vec::<Vec<u8>>::new();
     let mut loop_i = 0;
+    let mut recording = false; // for params.record_loop edge detection
 
     loop {
-        let params = streaming_params.lock().unwrap().clone();
+        let mut params = streaming_params.lock().unwrap().clone();
 
         // Switch video if requested
         if current_video_num != params.video_num && params.video_num < paths.len() {
@@ -136,11 +144,25 @@ fn main() -> std::io::Result<()> {
             current_video_num = params.video_num;
         }
 
-        if params.clear_loop {
+        if params.record_loop && !recording {
+            // clear loop buffer when starting a new recording
             loop_buf.clear();
+            loop_i = 0;
+        } else if !params.record_loop && recording {
+            params.play_loop = true;
+            let mut params_mut = streaming_params.lock().unwrap();
+            params_mut.play_loop = true;
+            if let Some(client_addr) = &params_mut.client_addr {
+                let msg_buf = encoder::encode(&OscPacket::Message(OscMessage{
+                    addr: "/play_loop".to_owned(),
+                    args: vec![OscType::Bool(params_mut.play_loop)],
+                })).unwrap();
+                send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
+            }
         }
+        recording = params.record_loop;
 
-        if loop_buf.len() > 0 && !params.record_loop {
+        if params.play_loop && loop_buf.len() > 0 {
             // Play from loop
             if loop_i >= loop_buf.len() {
                 loop_i = 0;
@@ -171,8 +193,7 @@ fn main() -> std::io::Result<()> {
 
 const PALETTE : &'static [&'static str] = &["EF476FFF", "FFD166FF", "06D6A0FF", "118AB2FF", "aa1d97ff"];
 
-fn video_name_sender(addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>, paths: Vec<PathBuf>) {
-    let send_sock = UdpSocket::bind(addr).unwrap();
+fn video_name_sender(send_sock: Arc<Mutex<UdpSocket>>, streaming_params: Arc<Mutex<StreamingParams>>, paths: Vec<PathBuf>) {
 
     loop {
         let params = streaming_params.lock().unwrap().clone();
@@ -182,7 +203,7 @@ fn video_name_sender(addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingPar
                 addr: "/fps".to_string(),
                 args: vec![OscType::Float(params.fps)],
             })).unwrap();
-            send_sock.send_to(&msg_buf, client_addr).unwrap();
+            send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
 
             // Send video labels
             let mut i = 5;
@@ -203,7 +224,7 @@ fn video_name_sender(addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingPar
                     addr: format!("/label{}", i).to_string(),
                     args: vec![OscType::String(filename), OscType::String(color.to_string())],
                 })).unwrap();
-                send_sock.send_to(&msg_buf, client_addr).unwrap();
+                send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
                 i += 1;
             }
             for j in i..54+(54-5)*2+1 {
@@ -211,7 +232,7 @@ fn video_name_sender(addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingPar
                     addr: format!("/label{}", j).to_string(),
                     args: vec![OscType::String("N/A".to_string()), OscType::String("#000000".to_string())],
                 })).unwrap();
-                send_sock.send_to(&msg_buf, client_addr).unwrap();
+                send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
             }
         }
         std::thread::sleep_ms(1000);
@@ -240,8 +261,8 @@ fn osc_listener(addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>
                             "/record_loop" => {
                                 params.record_loop = msg.args[0].clone().bool().unwrap();
                             },
-                            "/clear_loop" => {
-                                params.clear_loop = msg.args[0].clone().bool().unwrap();
+                            "/play_loop" => {
+                                params.play_loop = msg.args[0].clone().bool().unwrap();
                             },
                             "/pass_iframe" => {
                                 params.pass_iframe = msg.args[0].clone().bool().unwrap();
