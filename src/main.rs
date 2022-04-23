@@ -172,7 +172,13 @@ fn video_name_sender(addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingPar
     let send_sock = UdpSocket::bind(addr).unwrap();
 
     loop {
-        if let Some(client_addr) = streaming_params.lock().unwrap().client_addr {
+        let params = streaming_params.lock().unwrap().clone();
+        if let Some(client_addr) = params.client_addr {
+            let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
+                addr: "/fps".to_string(),
+                args: vec![OscType::Float(params.fps)],
+            })).unwrap();
+            send_sock.send_to(&msg_buf, client_addr).unwrap();
             let mut i = 5;
             for path in &paths {
                 let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
