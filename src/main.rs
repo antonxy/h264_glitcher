@@ -19,6 +19,7 @@ use std::thread;
 use std::sync::{Mutex, Arc};
 use std::net::{SocketAddr, UdpSocket};
 use rosc::{OscPacket, OscMessage, encoder, OscType};
+use spin_sleep::LoopHelper;
 
 
 #[derive(Debug, StructOpt)]
@@ -135,8 +136,15 @@ fn main() -> std::io::Result<()> {
     let mut loop_i = 0;
     let mut recording = false; // for params.record_loop edge detection
 
+    let mut loop_helper = LoopHelper::builder()
+        .report_interval_s(0.5) // report every half a second
+        .build_with_target_rate(30.0);
+
     loop {
         let mut params = streaming_params.lock().unwrap().clone();
+
+        loop_helper.set_target_rate(params.fps);
+        loop_helper.loop_start();
 
         // Switch video if requested
         if current_video_num != params.video_num && params.video_num < paths.len() {
@@ -186,7 +194,7 @@ fn main() -> std::io::Result<()> {
                 }
             }
         }
-        std::thread::sleep_ms((1000.0 / params.fps) as u32);
+        loop_helper.loop_sleep();
     }
     Ok(())
 }
