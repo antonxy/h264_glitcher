@@ -13,6 +13,7 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::mpsc::{SyncSender, TrySendError};
 use std::vec::Vec;
 use structopt::StructOpt;
 use std::thread;
@@ -80,10 +81,6 @@ fn main() -> std::io::Result<()> {
         Ok(addr) => addr,
         Err(_) => panic!("Invalid listen_addr"),
     };
-    let streaming_params_cpy = streaming_params.clone();
-    thread::spawn(move || {
-        osc_listener(&addr, streaming_params_cpy);
-    });
 
     let send_sock = UdpSocket::bind(send_from_addr).unwrap();
     let send_sock = Arc::new(Mutex::new(send_sock));
@@ -136,19 +133,36 @@ fn main() -> std::io::Result<()> {
     let mut loop_i = 0;
     let mut recording = false; // for params.record_loop edge detection
 
-    let mut loop_helper = LoopHelper::builder()
+    let (sender, receiver) = std::sync::mpsc::sync_channel(0);
+
+    std::thread::spawn({
+        let streaming_params = Arc::clone(&streaming_params);
+        let sender = sender.clone();
+        move || {
+        let mut loop_helper = LoopHelper::builder()
         .report_interval_s(0.5) // report every half a second
         .build_with_target_rate(30.0);
 
+        loop {
+            loop_helper.loop_start();
+            loop_helper.set_target_rate(streaming_params.lock().unwrap().fps);
+            if let Some(fps) = loop_helper.report_rate() {
+                eprintln!("FPS: {}", fps);
+            }
+            sender.send(()).unwrap(); // wake the main loop for one frame
+            loop_helper.loop_sleep(); // don't wake it again until next frame
+        }
+    }});
+
+    thread::spawn({
+        let streaming_params_cpy = streaming_params.clone();
+        let sender = sender.clone();
+        move || {
+        osc_listener(&addr, streaming_params_cpy, sender);
+    }});
+
     loop {
         let mut params = streaming_params.lock().unwrap().clone();
-
-        loop_helper.set_target_rate(params.fps);
-        loop_helper.loop_start();
-
-        if let Some(fps) = loop_helper.report_rate() {
-            eprintln!("FPS: {}", fps);
-        }
 
         // Switch video if requested
         if current_video_num != params.video_num && params.video_num < paths.len() {
@@ -198,7 +212,8 @@ fn main() -> std::io::Result<()> {
                 }
             }
         }
-        loop_helper.loop_sleep();
+
+        receiver.recv().unwrap();
     }
     Ok(())
 }
@@ -252,9 +267,17 @@ fn video_name_sender(send_sock: Arc<Mutex<UdpSocket>>, streaming_params: Arc<Mut
 
 }
 
-fn osc_listener(addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>) {
+fn osc_listener(addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>, wakeup_main_loop: SyncSender<()>) {
     let sock = UdpSocket::bind(addr).unwrap();
     eprintln!("OSC: Listening to {}", addr);
+
+    let wake_main_loop = move || {
+        match wakeup_main_loop.try_send(()) {
+            Ok(_) => (),
+            Err(TrySendError::Full(_)) => (),
+            e @ Err(x) => panic!(e),
+        }
+    };
 
     let mut buf = [0u8; rosc::decoder::MTU];
 
@@ -264,11 +287,13 @@ fn osc_listener(addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>
                 let packet = rosc::decoder::decode(&buf[..size]).unwrap();
                 let mut params = streaming_params.lock().unwrap();
                 params.client_addr = Some(client_addr);
+
                 match packet {
                     OscPacket::Message(msg) => {
                         match msg.addr.as_str() {
                             "/fps" => {
                                 params.fps = msg.args[0].clone().float().unwrap();
+                                wake_main_loop();
                             },
                             "/record_loop" => {
                                 params.record_loop = msg.args[0].clone().bool().unwrap();
@@ -281,6 +306,7 @@ fn osc_listener(addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>
                             },
                             "/video_num" => {
                                 params.video_num = msg.args[0].clone().int().unwrap() as usize;
+                                wake_main_loop();
                             },
                             _ => {
                                 eprintln!("Unhandled OSC address: {}", msg.addr);
