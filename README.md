@@ -30,7 +30,7 @@ Potentially interesting parameters:
 
 ## Run glitcher
 ```
-cargo run --release -- -i videos/* | mpv --untimed --no-cache -
+cargo run --release -- -i videos/* |  mpv --no-correct-pts --fps=1000 --no-cache -
 ```
 
 By default the glitcher listens on port 8000 for OSC messages.
