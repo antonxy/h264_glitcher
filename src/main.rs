@@ -11,9 +11,11 @@ extern crate structopt;
 use h264::FrameType;
 use std::fs::File;
 use std::io::{Read, Write};
+use std::ops::Add;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::mpsc::{SyncSender, TrySendError};
+use std::time::{Duration, Instant};
 use std::vec::Vec;
 use structopt::StructOpt;
 use std::thread;
@@ -139,18 +141,24 @@ fn main() -> std::io::Result<()> {
         let streaming_params = Arc::clone(&streaming_params);
         let sender = sender.clone();
         move || {
-        let mut loop_helper = LoopHelper::builder()
-        .report_interval_s(0.5) // report every half a second
-        .build_with_target_rate(30.0);
 
+        let max_supported_fps = 240.0;
+
+        let mut target_fps = 30.0;
+        let mut last_frame_at = Instant::now();
         loop {
-            loop_helper.loop_start();
-            loop_helper.set_target_rate(streaming_params.lock().unwrap().fps);
-            if let Some(fps) = loop_helper.report_rate() {
-                eprintln!("FPS: {}", fps);
+            target_fps = streaming_params.lock().unwrap().fps;
+            let now = Instant::now();
+            if last_frame_at.add(Duration::from_secs_f32(1.0 / target_fps)) >  now {
+                // Sleep very briefly, then re-evaluate.
+                // This lowers response time to fps / video_num changes.
+                // XXX: interruptible sleep would be better
+                spin_sleep::sleep(Duration::from_secs_f32( 1.0 / max_supported_fps));
+                continue;
             }
-            sender.send(()).unwrap(); // wake the main loop for one frame
-            loop_helper.loop_sleep(); // don't wake it again until next frame
+            last_frame_at = now;
+            // wake the main loop for one frame
+            sender.send(()).unwrap();
         }
     }});
 
