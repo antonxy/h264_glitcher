@@ -54,6 +54,9 @@ impl Drop for H264Parser {
 }
 
 mod test {
+    use crate::nal_iterator::NalIterator;
+    use crate::H264Parser;
+    use std::io::Read;
     #[test]
     fn smoke_test() {
         let file = std::fs::File::open("./big_buck_bunny.h264").unwrap();

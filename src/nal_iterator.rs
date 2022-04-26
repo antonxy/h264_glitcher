@@ -1,15 +1,12 @@
 use std::iter::Iterator;
-use itertools::structs::PeekNth;
-use itertools::peek_nth;
 
 //Info on byte stream format
 //https://yumichan.net/video-processing/video-compression/introduction-to-h264-nal-unit/
 
-//Iterator seems to work but also seems to be highly inefficient
-
 pub struct NalIterator<H264Stream: Iterator<Item = u8>>
 {
-    stream: PeekNth<H264Stream>,
+    stream: H264Stream,
+    found_nal_last_time: bool,
 }
 
 impl<H264Stream> NalIterator<H264Stream>
@@ -18,17 +15,44 @@ where
 {
     pub fn new(stream: H264Stream) -> NalIterator<H264Stream> {
         NalIterator {
-            stream: peek_nth(stream),
+            stream: stream,
+            found_nal_last_time: false,
         }
     }
 }
 
-fn peek_n<I: Iterator<Item=u8>>(it: &mut PeekNth<I>, n: usize) -> Vec<u8>
-{
-    (0..n).map(move |i| it.peek_nth(i).map(|x| *x))
-        .take_while(|x| x.is_some())
-        .map(|x| x.unwrap())
-        .collect()
+fn take_until_nal_start<I : Iterator<Item=u8>>(it: &mut I) -> Option<Vec<u8>> {
+    let mut nal_data = Vec::<u8>::new();
+
+    // Find nal end (start of next nal) (0x000001 or 0x00000001)
+    // Put to puffer while searching
+    let mut zeros_found : i32 = 0;
+    loop {
+        let next = it.next()?;
+        if next == 0x00 {
+            zeros_found += 1;
+        } else if next == 0x01 {
+            if zeros_found >= 2 {
+                for _ in 0..(zeros_found-3) {
+                    nal_data.push(0x00);
+                }
+                //found NAL start
+                return Some(nal_data);
+            } else {
+                for _ in 0..zeros_found {
+                    nal_data.push(0x00);
+                }
+                nal_data.push(next);
+                zeros_found = 0;
+            }
+        } else {
+            for _ in 0..zeros_found {
+                nal_data.push(0x00);
+            }
+            nal_data.push(next);
+            zeros_found = 0;
+        }
+    }
 }
 
 impl<H264Stream> Iterator for NalIterator<H264Stream>
@@ -38,43 +62,12 @@ where
     type Item = Vec<u8>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        // Find nal start (0x000001 or 0x00000001)
-        loop {
-            if peek_n(&mut self.stream, 3) == [0x00, 0x00, 0x01] {
-                if self.stream.nth(2).is_none() { //advance
-                    return None
-                }
-                break;
-            }
-            if peek_n(&mut self.stream, 4) == [0x00, 0x00, 0x00, 0x01] {
-                if self.stream.nth(3).is_none() { //advance
-                    return None
-                }
-                break;
-            }
-            if self.stream.next().is_none() {
-                return None
-            }
+        if !self.found_nal_last_time {
+            take_until_nal_start(&mut self.stream)?;
+            self.found_nal_last_time = true;
         }
 
-        let mut nal_data = Vec::<u8>::new();
-
-        // Find nal end (start of next nal) (0x000001 or 0x00000001)
-        // Put to puffer while searching
-        loop {
-            if peek_n(&mut self.stream, 3) == [0x00, 0x00, 0x01] {
-                break;
-            }
-            if peek_n(&mut self.stream, 4) == [0x00, 0x00, 0x00, 0x01] {
-                break;
-            }
-            match self.stream.next() {
-                Some(x) => nal_data.push(x),
-                None => return None,
-            }
-        }
-
-        Some(nal_data)
+        take_until_nal_start(&mut self.stream)
     }
 }
 
@@ -84,11 +77,11 @@ mod test {
     use std::io::Read;
     #[test]
     fn test_short_head() {
-        let data : Vec<u8> = vec![0xaa, 0xaa, 0x00, 0x00, 0x01, 0xbb, 0xbb, 0xbb, 0x00, 0x00, 0x01];
+        let data : Vec<u8> = vec![0xaa, 0xaa, 0x00, 0x00, 0x01, 0xbb, 0x00, 0x01, 0xbb, 0xbb, 0x00, 0x00, 0x01];
         let it = NalIterator::new(data.into_iter());
         let items: Vec<_> = it.collect();
         assert_eq!(items.len(), 1);
-        let packet : &[u8] = &[0xbb, 0xbb, 0xbb][..];
+        let packet : &[u8] = &[0xbb, 0x00, 0x01, 0xbb, 0xbb][..];
         assert_eq!(items[0], packet);
     }
 
@@ -99,6 +92,16 @@ mod test {
         let items: Vec<_> = it.collect();
         assert_eq!(items.len(), 1);
         let packet : &[u8] = &[0xbb, 0xbb, 0xbb][..];
+        assert_eq!(items[0], packet);
+    }
+
+    #[test]
+    fn test_multi_zero() {
+        let data : Vec<u8> = vec![0xaa, 0xaa, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0xbb, 0x00, 0x00, 0xbb, 0xbb, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01];
+        let it = NalIterator::new(data.into_iter());
+        let items: Vec<_> = it.collect();
+        assert_eq!(items.len(), 1);
+        let packet : &[u8] = &[0xbb, 0x00, 0x00, 0xbb, 0xbb, 0x00, 0x00][..];
         assert_eq!(items[0], packet);
     }
 
