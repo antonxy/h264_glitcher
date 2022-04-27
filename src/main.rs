@@ -21,20 +21,19 @@ use structopt::StructOpt;
 use std::thread;
 use std::sync::{Mutex, Arc};
 use std::net::{SocketAddr, UdpSocket};
-use rosc::{OscPacket, OscMessage, encoder, OscType};
-use spin_sleep::LoopHelper;
+use rosc::{OscPacket, OscMessage, encoder};
 
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "h264_glitcher", about = "Live controllable h264 glitcher.",
-            long_about = "Pipe output into 'mpv --untimed --no-cache -'.")]
+            long_about = "Pipe output into mpv.")]
 struct Opt {
     #[structopt(short, long, parse(from_os_str), required=true, help="Input video file(s). Directories will be ignored.")]
     input: Vec<PathBuf>,
 
     #[structopt(short = "l", long, default_value = "0.0.0.0:8000", help="OSC listen address")]
     listen_addr: String,
-    #[structopt(short = "l", long, default_value = "0.0.0.0:8001", help="OSC send address")]
+    #[structopt(short = "l", long, default_value = "0.0.0.0:0", help="OSC send address")]
     send_addr: String,
 }
 
@@ -64,7 +63,6 @@ impl Default for StreamingParams {
 
 fn main() -> std::io::Result<()> {
     let opt = Opt::from_args();
-    eprintln!("{:?}", opt);
 
     let paths : Vec<PathBuf> = opt.input.into_iter().filter(|p| p.is_file()).collect();
     // Check if all files can be opened
@@ -81,18 +79,18 @@ fn main() -> std::io::Result<()> {
     };
     let send_from_addr = match SocketAddr::from_str(&opt.send_addr) {
         Ok(addr) => addr,
-        Err(_) => panic!("Invalid listen_addr"),
+        Err(_) => panic!("Invalid send_addr"),
     };
 
     let send_sock = UdpSocket::bind(send_from_addr).unwrap();
     let send_sock = Arc::new(Mutex::new(send_sock));
 
-    let streaming_params_cpy = streaming_params.clone();
-    let paths_cpy = paths.clone();
     thread::spawn({
-        let send_sock  = Arc::clone(&send_sock);
+        let send_sock = Arc::clone(&send_sock);
+        let streaming_params = streaming_params.clone();
+        let paths = paths.clone();
         move || {
-        video_name_sender(send_sock, streaming_params_cpy, paths_cpy);
+        video_name_sender(send_sock, streaming_params, paths);
     }});
 
     let stdout = std::io::stdout();
@@ -144,10 +142,9 @@ fn main() -> std::io::Result<()> {
 
         let max_supported_fps = 240.0;
 
-        let mut target_fps = 30.0;
         let mut last_frame_at = Instant::now();
         loop {
-            target_fps = streaming_params.lock().unwrap().fps;
+            let target_fps = streaming_params.lock().unwrap().fps;
             let now = Instant::now();
             if last_frame_at.add(Duration::from_secs_f32(1.0 / target_fps)) >  now {
                 // Sleep very briefly, then re-evaluate.
@@ -163,10 +160,10 @@ fn main() -> std::io::Result<()> {
     }});
 
     thread::spawn({
-        let streaming_params_cpy = streaming_params.clone();
+        let streaming_params = streaming_params.clone();
         let sender = sender.clone();
         move || {
-        osc_listener(&addr, streaming_params_cpy, sender);
+        osc_listener(&addr, streaming_params, sender);
     }});
 
     loop {
@@ -189,7 +186,7 @@ fn main() -> std::io::Result<()> {
             if let Some(client_addr) = &params_mut.client_addr {
                 let msg_buf = encoder::encode(&OscPacket::Message(OscMessage{
                     addr: "/play_loop".to_owned(),
-                    args: vec![OscType::Bool(params_mut.play_loop)],
+                    args: vec![params_mut.play_loop.into()],
                 })).unwrap();
                 send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
             }
@@ -223,7 +220,6 @@ fn main() -> std::io::Result<()> {
 
         receiver.recv().unwrap();
     }
-    Ok(())
 }
 
 const PALETTE : &'static [&'static str] = &["EF476FFF", "FFD166FF", "06D6A0FF", "118AB2FF", "aa1d97ff"];
@@ -236,7 +232,7 @@ fn video_name_sender(send_sock: Arc<Mutex<UdpSocket>>, streaming_params: Arc<Mut
             // Send FPS
             let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
                 addr: "/fps".to_string(),
-                args: vec![OscType::Float(params.fps)],
+                args: vec![params.fps.into()],
             })).unwrap();
             send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
 
@@ -257,7 +253,7 @@ fn video_name_sender(send_sock: Arc<Mutex<UdpSocket>>, streaming_params: Arc<Mut
 
                 let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
                     addr: format!("/label{}", i).to_string(),
-                    args: vec![OscType::String(filename), OscType::String(color.to_string())],
+                    args: vec![filename.into(), color.into()],
                 })).unwrap();
                 send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
                 i += 1;
@@ -265,12 +261,12 @@ fn video_name_sender(send_sock: Arc<Mutex<UdpSocket>>, streaming_params: Arc<Mut
             for j in i..54+(54-5)*2+1 {
                 let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
                     addr: format!("/label{}", j).to_string(),
-                    args: vec![OscType::String("N/A".to_string()), OscType::String("#000000".to_string())],
+                    args: vec!["N/A".into(), "#000000".into()],
                 })).unwrap();
                 send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
             }
         }
-        std::thread::sleep_ms(1000);
+        std::thread::sleep(Duration::from_millis(1000));
     }
 
 }
@@ -283,11 +279,39 @@ fn osc_listener(addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>
         match wakeup_main_loop.try_send(()) {
             Ok(_) => (),
             Err(TrySendError::Full(_)) => (),
-            e @ Err(x) => panic!(e),
+            e @ Err(_) => panic!("{:?}", e),
         }
     };
 
     let mut buf = [0u8; rosc::decoder::MTU];
+
+    let parse_message = |msg: &OscMessage, params: &mut StreamingParams| -> Result<(), ()> {
+        match msg.addr.as_str() {
+            "/fps" => {
+                params.fps = msg.args[0].clone().float().ok_or(())?;
+                wake_main_loop();
+            },
+            "/record_loop" => {
+                params.record_loop = msg.args[0].clone().bool().ok_or(())?;
+            },
+            "/play_loop" => {
+                params.play_loop = msg.args[0].clone().bool().ok_or(())?;
+            },
+            "/pass_iframe" => {
+                params.pass_iframe = msg.args[0].clone().bool().ok_or(())?;
+            },
+            "/video_num" => {
+                params.video_num = msg.args[0].clone().int().ok_or(())? as usize;
+                wake_main_loop();
+            },
+            _ => {
+                eprintln!("Unhandled OSC address: {}", msg.addr);
+                eprintln!("Unhandled OSC arguments: {:?}", msg.args);
+                return Err(());
+            }
+        }
+        Ok(())
+    };
 
     loop {
         match sock.recv_from(&mut buf) {
@@ -296,35 +320,18 @@ fn osc_listener(addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>
                 let mut params = streaming_params.lock().unwrap();
                 params.client_addr = Some(client_addr);
 
-                match packet {
-                    OscPacket::Message(msg) => {
-                        match msg.addr.as_str() {
-                            "/fps" => {
-                                params.fps = msg.args[0].clone().float().unwrap();
-                                wake_main_loop();
-                            },
-                            "/record_loop" => {
-                                params.record_loop = msg.args[0].clone().bool().unwrap();
-                            },
-                            "/play_loop" => {
-                                params.play_loop = msg.args[0].clone().bool().unwrap();
-                            },
-                            "/pass_iframe" => {
-                                params.pass_iframe = msg.args[0].clone().bool().unwrap();
-                            },
-                            "/video_num" => {
-                                params.video_num = msg.args[0].clone().int().unwrap() as usize;
-                                wake_main_loop();
-                            },
-                            _ => {
-                                eprintln!("Unhandled OSC address: {}", msg.addr);
-                                eprintln!("Unhandled OSC arguments: {:?}", msg.args);
-                            }
-                        }
+                let parse_result = match packet {
+                    OscPacket::Message(ref msg) => {
+                        parse_message(&msg, &mut params)
                     }
-                    OscPacket::Bundle(bundle) => {
-                        eprintln!("OSC Bundle: {:?}", bundle);
+                    OscPacket::Bundle(_) => {
+                        eprintln!("Received bundle but they are currently not handled");
+                        Err(())
                     }
+                };
+
+                if parse_result.is_err() {
+                    eprintln!("Failed to parse OSC Packet: {:?}", packet);
                 }
             }
             Err(e) => {
