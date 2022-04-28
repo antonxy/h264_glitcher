@@ -220,6 +220,8 @@ fn main() -> std::io::Result<()> {
                 if params.record_loop {
                     loop_buf.push(data);
                 }
+            } else {
+                continue; //If we didn't send out frame don't sleep
             }
         }
 
