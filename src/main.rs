@@ -98,9 +98,11 @@ fn main() -> std::io::Result<()> {
     let stdout = std::io::stdout();
     let mut handle = stdout.lock();
 
+    handle.write_all(&[0x00, 0x00, 0x00, 0x01])?;
+
     let mut write_frame = move |data : &[u8]| -> std::io::Result<()> {
-        handle.write_all(&[0x00, 0x00, 0x00, 0x01])?;
         handle.write_all(data)?;
+        handle.write_all(&[0x00, 0x00, 0x00, 0x01])?;
         handle.flush()?;
         Ok(())
     };
