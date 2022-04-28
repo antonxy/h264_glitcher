@@ -44,6 +44,7 @@ struct StreamingParams {
     record_loop: bool,
     play_loop: bool,
     pass_iframe: bool,
+    drop_frames: bool,
     video_num: usize,
     client_addr: Option<SocketAddr>,
 }
@@ -55,6 +56,7 @@ impl Default for StreamingParams {
             record_loop: false,
             play_loop: false,
             pass_iframe: false,
+            drop_frames: false,
             video_num: 0,
             client_addr: None,
         }
@@ -203,6 +205,9 @@ fn main() -> std::io::Result<()> {
 
         } else {
             // Play from file
+            if params.drop_frames {
+                h264_iter.next();
+            }
             let mut frame = h264_iter.next();
             // Restart video if at end
             if frame.is_none() {
@@ -299,6 +304,9 @@ fn osc_listener(addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>
             },
             "/pass_iframe" => {
                 params.pass_iframe = msg.args[0].clone().bool().ok_or(())?;
+            },
+            "/drop_frames" => {
+                params.drop_frames = msg.args[0].clone().bool().ok_or(())?;
             },
             "/video_num" => {
                 params.video_num = msg.args[0].clone().int().ok_or(())? as usize;
