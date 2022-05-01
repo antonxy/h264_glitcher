@@ -2,7 +2,7 @@ pub(crate) mod h264;
 pub(crate) mod nal_iterator;
 pub(crate) mod parse_nal;
 
-use crate::parse_nal::NalUnit;
+use crate::parse_nal::*;
 use crate::h264::NALUnitType;
 use crate::nal_iterator::NalIterator;
 
@@ -34,6 +34,9 @@ struct Opt {
     listen_addr: String,
     #[structopt(short = "s", long, default_value = "0.0.0.0:0", help="OSC send address")]
     send_addr: String,
+
+    #[structopt(long, help="Rewrite frame_num fields for potentially smoother playback")]
+    rewrite_frame_nums: bool,
 }
 
 
@@ -99,8 +102,25 @@ fn main() -> std::io::Result<()> {
 
     handle.write_all(&[0x00, 0x00, 0x00, 0x01])?;
 
-    let mut write_frame = move |data : &[u8]| -> std::io::Result<()> {
-        handle.write_all(data)?;
+
+    //let mut last_frame_num = 0;
+    let rewrite_frame_nums = opt.rewrite_frame_nums;
+    let mut write_frame = move |nal_unit: &NalUnit| -> std::io::Result<()> {
+        let mut nal_unit = nal_unit.clone();
+        let has_frame_num = match nal_unit.nal_unit_type {
+            NALUnitType::CodedSliceIdr | NALUnitType::CodedSliceNonIdr => { true },
+            _ => { false },
+        };
+        if rewrite_frame_nums && has_frame_num {
+            let mut header = SliceHeader::from_bytes(&nal_unit.rbsp).unwrap();
+            //header.frame_num = last_frame_num;
+            header.frame_num = 0; // Just setting all frame nums to zero seems to cause less crashes in mpv
+            //last_frame_num += 1;
+            //last_frame_num %= 16;
+            nal_unit.rbsp = header.to_bytes();
+
+        }
+        handle.write_all(&nal_unit.to_bytes())?;
         handle.write_all(&[0x00, 0x00, 0x00, 0x01])?;
         handle.flush()?;
         Ok(())
@@ -124,15 +144,17 @@ fn main() -> std::io::Result<()> {
     // Write out at least one I-frame
     loop {
         let (data, nal_unit) = h264_iter.next().unwrap();
-        write_frame(&data)?;
-        if nal_unit.map_or(false, |x| x.nal_unit_type == NALUnitType::CodedSliceIdr) {
-            eprintln!("Got first I frame");
-            break;
+        if let Ok(nal_unit) = nal_unit {
+            write_frame(&nal_unit)?;
+            if nal_unit.nal_unit_type == NALUnitType::CodedSliceIdr {
+                eprintln!("Got first I frame");
+                break;
+            }
         }
     }
 
 
-    let mut loop_buf = Vec::<Vec<u8>>::new();
+    let mut loop_buf = Vec::<NalUnit>::new();
     let mut loop_i = 0;
     let mut recording = false; // for params.record_loop edge detection
 
@@ -216,10 +238,14 @@ fn main() -> std::io::Result<()> {
                 frame = h264_iter.next();
             }
             let (data, nal_unit) = frame.unwrap();
-            if nal_unit.map_or(false, |x| x.nal_unit_type != NALUnitType::CodedSliceIdr || params.pass_iframe) {
-                write_frame(&data)?;
-                if params.record_loop {
-                    loop_buf.push(data);
+            if let Ok(mut nal_unit) = nal_unit {
+                if nal_unit.nal_unit_type != NALUnitType::CodedSliceIdr || params.pass_iframe {
+                    write_frame(&nal_unit)?;
+                    if params.record_loop {
+                        loop_buf.push(nal_unit);
+                    }
+                } else {
+                    continue;
                 }
             } else {
                 continue; //If we didn't send out frame don't sleep
