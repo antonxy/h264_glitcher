@@ -1,14 +1,13 @@
 pub(crate) mod h264;
 pub(crate) mod nal_iterator;
 pub(crate) mod parse_nal;
-pub mod libh264bitstream;
 
-use crate::parse_nal::H264Parser;
+use crate::parse_nal::NalUnit;
+use crate::h264::NALUnitType;
 use crate::nal_iterator::NalIterator;
 
 extern crate structopt;
 
-use h264::FrameType;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::ops::Add;
@@ -33,7 +32,7 @@ struct Opt {
 
     #[structopt(short = "l", long, default_value = "0.0.0.0:8000", help="OSC listen address")]
     listen_addr: String,
-    #[structopt(short = "l", long, default_value = "0.0.0.0:0", help="OSC send address")]
+    #[structopt(short = "s", long, default_value = "0.0.0.0:0", help="OSC send address")]
     send_addr: String,
 }
 
@@ -112,10 +111,9 @@ fn main() -> std::io::Result<()> {
         let input_file = File::open(path)?;
         let file = std::io::BufReader::with_capacity(1<<20, input_file);
         let it = NalIterator::new(file.bytes().map(|x| x.unwrap()));
-        let mut parser = H264Parser::new();
         let it = it.map(move |data| {
-            let info = parser.parse_nal(&data);
-            (data, info)
+            let nal_unit = NalUnit::from_bytes(&data);
+            (data, nal_unit)
         });
         Ok(it)
     };
@@ -125,9 +123,10 @@ fn main() -> std::io::Result<()> {
 
     // Write out at least one I-frame
     loop {
-        let (data, info) = h264_iter.next().unwrap();
+        let (data, nal_unit) = h264_iter.next().unwrap();
         write_frame(&data)?;
-        if info.map_or(false, |x| x.frame_type == FrameType::IOnly) {
+        if nal_unit.map_or(false, |x| x.nal_unit_type == NALUnitType::CodedSliceIdr) {
+            eprintln!("Got first I frame");
             break;
         }
     }
@@ -216,8 +215,8 @@ fn main() -> std::io::Result<()> {
                 h264_iter = open_h264_file(&paths[current_video_num])?;
                 frame = h264_iter.next();
             }
-            let (data, info) = frame.unwrap();
-            if info.map_or(false, |x| x.frame_type != FrameType::IOnly || params.pass_iframe) {
+            let (data, nal_unit) = frame.unwrap();
+            if nal_unit.map_or(false, |x| x.nal_unit_type != NALUnitType::CodedSliceIdr || params.pass_iframe) {
                 write_frame(&data)?;
                 if params.record_loop {
                     loop_buf.push(data);

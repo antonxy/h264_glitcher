@@ -1,62 +1,82 @@
-use crate::{h264::FrameType, h264::NALUnitType, libh264bitstream};
+use crate::h264::NALUnitType;
 use enum_primitive::FromPrimitive;
+use bitreader::{BitReader, BitReaderError};
 
-use crate::libh264bitstream::{h264_stream_t, read_nal_unit};
+#[derive(Debug)]
+pub enum NalParseError {
+    EndOfStream,
+    InvalidData,
+    Unimplemented
+}
 
-#[derive(Debug, Clone)]
-pub struct NalItem {
+impl From<BitReaderError> for NalParseError {
+    fn from(e: BitReaderError) -> Self {
+        match e {
+            BitReaderError::NotEnoughData{..} => { Self::EndOfStream },
+            BitReaderError::TooManyBitsForType{..} => { panic!("Programming error: {:?}", e) }
+        }
+    }
+}
+
+pub struct NalUnit {
+    pub nal_ref_idc : u8,
     pub nal_unit_type: NALUnitType,
-    pub frame_type: FrameType,
+    rbsp: Vec<u8>,
 }
 
-pub struct H264Parser {
-    h2 : *mut h264_stream_t,
-}
+fn decode_nal_to_rbsp(bytes: &[u8]) -> Vec<u8> {
+    let mut rbsp = Vec::with_capacity(bytes.len());
 
-impl H264Parser {
-
-    pub fn new() -> Self {
-        let h2: *mut h264_stream_t = unsafe { libh264bitstream::h264_new() };
-        Self {
-            h2
+    let mut i = 0;
+    while i < bytes.len() {
+        if i + 2 < bytes.len() && bytes[i..=i+2] == [0x00, 0x00, 0x03] {
+            rbsp.push(bytes[i]);
+            i += 1;
+            rbsp.push(bytes[i]);
+            i += 2;
+        } else {
+            rbsp.push(bytes[i]);
+            i += 1;
         }
     }
+    rbsp
+}
 
-    pub fn parse_nal<T: AsRef<[u8]>>(&mut self, nal_data : T) -> Option<NalItem> {
-        let nal_data : &[u8] = nal_data.as_ref();
-        // create NalItem
-        let ret = unsafe {
-            read_nal_unit(
-                self.h2,
-                nal_data.to_vec().as_mut_ptr(),
-                nal_data.len() as i32
-                )
-        };
-        if ret == -1 || ret != nal_data.len() as i32 {
-            // sometimes, read_nal_unit fails
-            return None;
+impl NalUnit {
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, NalParseError> {
+        let mut reader = BitReader::new(bytes);
+
+        if reader.read_bool()? != false { //forbidden_zero_bit
+            return Err(NalParseError::InvalidData);
         }
 
-        let nal_unit_type = unsafe { (*(*self.h2).nal).nal_unit_type.into() };
-        let frame_type = unsafe { FrameType::from_sh_slice_type((*(*self.h2).sh).slice_type) };
+        let nal_ref_idc = reader.read_u8(2)?;
+        let nal_unit_type = reader.read_u8(5)?;
 
-        let item = NalItem { nal_unit_type: NALUnitType::from_i32(nal_unit_type).unwrap(), frame_type };
+        let nal_unit_header_bytes = 1;
 
-        Some(item)
+        // extensions
+        match nal_unit_type {
+            14 | 20 | 21 => { return Err(NalParseError::Unimplemented)? },
+            _ => {}
+        }
+
+        let nal_unit_type = NALUnitType::from_u8(nal_unit_type).ok_or(NalParseError::InvalidData)?;
+        let rbsp = decode_nal_to_rbsp(&bytes[nal_unit_header_bytes..]);
+
+        Ok(Self {
+            nal_ref_idc,
+            nal_unit_type,
+            rbsp
+        })
     }
 }
 
-
-impl Drop for H264Parser {
-    fn drop(&mut self) {
-        unsafe { libh264bitstream::h264_free(self.h2) };
-    }
-}
 
 #[cfg(test)]
 mod test {
     use crate::NalIterator;
-    use crate::H264Parser;
+    use crate::NalUnit;
     use std::io::Read;
 
     #[test]
@@ -64,10 +84,7 @@ mod test {
         let file = std::fs::File::open("./big_buck_bunny.h264").unwrap();
         let file = std::io::BufReader::new(file);
         let it = NalIterator::new(file.bytes().map(|x| x.unwrap()));
-        let mut parser = H264Parser::new();
-        let it = it.map(move |x| parser.parse_nal(x));
-        for el in it {
-            println!("{:?}", el);
-        }
+        let it = it.map(move |x| NalUnit::from_bytes(&x));
+        let vec : Vec<_> = it.collect();
     }
 }
