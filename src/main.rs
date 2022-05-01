@@ -45,6 +45,7 @@ struct StreamingParams {
     fps: f32,
     record_loop: bool,
     play_loop: bool,
+    loop_ping_pong: bool,
     pass_iframe: bool,
     drop_frames: bool,
     video_num: usize,
@@ -57,6 +58,7 @@ impl Default for StreamingParams {
             fps: 30.0,
             record_loop: false,
             play_loop: false,
+            loop_ping_pong: false,
             pass_iframe: false,
             drop_frames: false,
             video_num: 0,
@@ -103,7 +105,7 @@ fn main() -> std::io::Result<()> {
     handle.write_all(&[0x00, 0x00, 0x00, 0x01])?;
 
 
-    //let mut last_frame_num = 0;
+    let mut last_frame_num = 0;
     let rewrite_frame_nums = opt.rewrite_frame_nums;
     let mut write_frame = move |nal_unit: &NalUnit| -> std::io::Result<()> {
         let mut nal_unit = nal_unit.clone();
@@ -113,10 +115,14 @@ fn main() -> std::io::Result<()> {
         };
         if rewrite_frame_nums && has_frame_num {
             let mut header = SliceHeader::from_bytes(&nal_unit.rbsp).unwrap();
-            //header.frame_num = last_frame_num;
-            header.frame_num = 0; // Just setting all frame nums to zero seems to cause less crashes in mpv
-            //last_frame_num += 1;
-            //last_frame_num %= 16;
+            // Just setting all frame nums to zero also seems to work.
+            // Maybe mpv even crashes a bit less with just zero
+            // I haven't observed a crash for a while though, maybe it was something else also
+            //header.frame_num = 0;
+
+            header.frame_num = last_frame_num;
+            last_frame_num += 1;
+            last_frame_num %= 16; //This just assumes frame nums are encoded with 4 bits. That doesn't have to be the case though.
             nal_unit.rbsp = header.to_bytes();
 
         }
@@ -156,6 +162,7 @@ fn main() -> std::io::Result<()> {
 
     let mut loop_buf = Vec::<NalUnit>::new();
     let mut loop_i = 0;
+    let mut loop_backwards = false;
     let mut recording = false; // for params.record_loop edge detection
 
     let (sender, receiver) = std::sync::mpsc::sync_channel(0);
@@ -220,11 +227,28 @@ fn main() -> std::io::Result<()> {
 
         if params.play_loop && loop_buf.len() > 0 {
             // Play from loop
-            if loop_i >= loop_buf.len() {
-                loop_i = 0;
+            if params.loop_ping_pong {
+                if loop_backwards {
+                    if loop_i > 0 {
+                        loop_i -= 1;
+                    }
+                    if loop_i == 0 {
+                        loop_backwards = false;
+                    }
+                } else {
+                    loop_i += 1;
+                    if loop_i >= loop_buf.len() - 1 {
+                        loop_backwards = true;
+                    }
+                }
+            } else {
+                loop_i += 1;
+                if loop_i >= loop_buf.len() {
+                    loop_i = 0;
+                }
             }
+
             write_frame(&loop_buf[loop_i])?;
-            loop_i += 1;
 
         } else {
             // Play from file
@@ -245,7 +269,7 @@ fn main() -> std::io::Result<()> {
                         loop_buf.push(nal_unit);
                     }
                 } else {
-                    continue;
+                    continue; //If we didn't send out frame don't sleep
                 }
             } else {
                 continue; //If we didn't send out frame don't sleep
@@ -330,6 +354,9 @@ fn osc_listener(addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>
             },
             "/play_loop" => {
                 params.play_loop = msg.args[0].clone().bool().ok_or(())?;
+            },
+            "/loop_ping_pong" => {
+                params.loop_ping_pong = msg.args[0].clone().bool().ok_or(())?;
             },
             "/pass_iframe" => {
                 params.pass_iframe = msg.args[0].clone().bool().ok_or(())?;
