@@ -50,6 +50,8 @@ struct StreamingParams {
     drop_frames: bool,
     video_num: usize,
     client_addr: Option<SocketAddr>,
+    save_loop_num: Option<usize>,
+    recall_loop_num: Option<usize>,
 }
 
 impl Default for StreamingParams {
@@ -63,6 +65,8 @@ impl Default for StreamingParams {
             drop_frames: false,
             video_num: 0,
             client_addr: None,
+            save_loop_num: None,
+            recall_loop_num: None,
         }
     }
 }
@@ -160,6 +164,7 @@ fn main() -> std::io::Result<()> {
     }
 
 
+    let mut loop_mem = std::collections::HashMap::<usize, Vec<NalUnit>>::new();
     let mut loop_buf = Vec::<NalUnit>::new();
     let mut loop_i = 0;
     let mut loop_backwards = false;
@@ -205,6 +210,25 @@ fn main() -> std::io::Result<()> {
         if current_video_num != params.video_num && params.video_num < paths.len() {
             h264_iter = open_h264_file(&paths[params.video_num])?;
             current_video_num = params.video_num;
+        }
+
+        if let Some(save_loop_num) = params.save_loop_num {
+            loop_mem.insert(save_loop_num, loop_buf.clone());
+            streaming_params.lock().unwrap().save_loop_num = None;
+        }
+        
+        if let Some(recall_loop_num) = params.recall_loop_num {
+            loop_mem.get(&recall_loop_num).map(|x| loop_buf = x.clone());
+            let mut params_mut = streaming_params.lock().unwrap();
+            params_mut.recall_loop_num = None;
+            params_mut.play_loop = true;
+            if let Some(client_addr) = &params_mut.client_addr {
+                let msg_buf = encoder::encode(&OscPacket::Message(OscMessage{
+                    addr: "/play_loop".to_owned(),
+                    args: vec![params_mut.play_loop.into()],
+                })).unwrap();
+                send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
+            }
         }
 
         if params.record_loop && !recording {
@@ -368,6 +392,12 @@ fn osc_listener(addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>
                 params.video_num = msg.args[0].clone().int().ok_or(())? as usize;
                 wake_main_loop();
             },
+            "/save_loop" => {
+                params.save_loop_num = Some(msg.args[0].clone().int().ok_or(())? as usize);
+            },
+            "/recall_loop" => {
+                params.recall_loop_num = Some(msg.args[0].clone().int().ok_or(())? as usize);
+            }
             _ => {
                 eprintln!("Unhandled OSC address: {}", msg.addr);
                 eprintln!("Unhandled OSC arguments: {:?}", msg.args);
