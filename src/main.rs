@@ -249,7 +249,7 @@ fn main() -> std::io::Result<()> {
         }
         recording = params.record_loop;
 
-        if params.play_loop && loop_buf.len() > 0 {
+        if params.play_loop && loop_buf.len() > 0 && !recording {
             // Play from loop
             if params.loop_ping_pong {
                 if loop_backwards {
@@ -263,6 +263,7 @@ fn main() -> std::io::Result<()> {
                     loop_i += 1;
                     if loop_i >= loop_buf.len() - 1 {
                         loop_backwards = true;
+                        loop_i = loop_buf.len() - 1;
                     }
                 }
             } else {
