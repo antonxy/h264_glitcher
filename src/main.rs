@@ -46,6 +46,7 @@ struct StreamingParams {
     record_loop: bool,
     play_loop: bool,
     loop_ping_pong: bool,
+    cut_loop: Option<f32>,
     pass_iframe: bool,
     drop_frames: bool,
     video_num: usize,
@@ -61,6 +62,7 @@ impl Default for StreamingParams {
             record_loop: false,
             play_loop: false,
             loop_ping_pong: false,
+            cut_loop: None,
             pass_iframe: false,
             drop_frames: false,
             video_num: 0,
@@ -206,6 +208,8 @@ fn main() -> std::io::Result<()> {
     loop {
         let mut params = streaming_params.lock().unwrap().clone();
 
+        // Process all "requests"
+
         // Switch video if requested
         if current_video_num != params.video_num && params.video_num < paths.len() {
             h264_iter = open_h264_file(&paths[params.video_num])?;
@@ -230,6 +234,14 @@ fn main() -> std::io::Result<()> {
                 send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
             }
         }
+
+        if let Some(cut_loop) = params.cut_loop {
+            let new_len = (loop_buf.len() as f32 * cut_loop) as usize + 1;
+            loop_buf.truncate(new_len);
+            streaming_params.lock().unwrap().cut_loop = None;
+        }
+
+        // Now the state based stuff
 
         if params.record_loop && !recording {
             // clear loop buffer when starting a new recording
@@ -382,6 +394,9 @@ fn osc_listener(addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>
             },
             "/loop_ping_pong" => {
                 params.loop_ping_pong = msg.args[0].clone().bool().ok_or(())?;
+            },
+            "/cut_loop" => {
+                params.cut_loop = Some(msg.args[0].clone().float().ok_or(())?);
             },
             "/pass_iframe" => {
                 params.pass_iframe = msg.args[0].clone().bool().ok_or(())?;
