@@ -462,13 +462,6 @@ fn osc_listener(send_sock: Arc<Mutex<UdpSocket>>, addr: &SocketAddr, streaming_p
                         args: vec![OscType::Int(1)],
                     })).unwrap();
                     send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
-                    let fifty_millis = Duration::from_millis(50);
-                    thread::sleep(fifty_millis);
-                    let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
-                        addr: "/beat".to_string(),
-                        args: vec![OscType::Int(0)],
-                    })).unwrap();
-                    send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
                 }
             }
             _ => {
