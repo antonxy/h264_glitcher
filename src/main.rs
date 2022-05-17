@@ -406,8 +406,12 @@ fn osc_listener(send_sock: Arc<Mutex<UdpSocket>>, addr: &SocketAddr, streaming_p
 
     let mut buf = [0u8; rosc::decoder::MTU];
 
-    let parse_message = |msg: &OscMessage, params: &mut StreamingParams| -> Result<(), ()> {
+    let parse_message = |msg: &OscMessage, params: &mut StreamingParams, client_addr: SocketAddr| -> Result<(), ()> {
         match msg.addr.as_str() {
+            "/set_client_address" => {
+                params.client_addr = Some(client_addr);
+                eprintln!("updated client_addr: {:?}", params.client_addr);
+            },
             "/fps" => {
                 params.fps = msg.args[0].clone().float().ok_or(())?;
                 wake_main_loop();
@@ -478,13 +482,9 @@ fn osc_listener(send_sock: Arc<Mutex<UdpSocket>>, addr: &SocketAddr, streaming_p
             Ok((size, client_addr)) => {
                 let packet = rosc::decoder::decode(&buf[..size]).unwrap();
                 let mut params = streaming_params.lock().unwrap();
-                if params.client_addr == None || !client_addr.ip().is_loopback() {
-                    params.client_addr = Some(client_addr);
-                    eprintln!("updated client_addr");
-                }
                 let parse_result = match packet {
                     OscPacket::Message(ref msg) => {
-                        parse_message(&msg, &mut params)
+                        parse_message(&msg, &mut params, client_addr)
                     }
                     OscPacket::Bundle(_) => {
                         eprintln!("Received bundle but they are currently not handled");
