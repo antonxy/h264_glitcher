@@ -20,7 +20,7 @@ use structopt::StructOpt;
 use std::thread;
 use std::sync::{Mutex, Arc};
 use std::net::{SocketAddr, UdpSocket};
-use rosc::{OscPacket, OscMessage, encoder};
+use rosc::{OscPacket, OscMessage, encoder, OscType};
 
 
 #[derive(Debug, StructOpt)]
@@ -54,6 +54,8 @@ struct StreamingParams {
     client_addr: Option<SocketAddr>,
     save_loop_num: Option<usize>,
     recall_loop_num: Option<usize>,
+    auto_skip: bool,
+    auto_switch: bool,
 }
 
 impl Default for StreamingParams {
@@ -71,6 +73,8 @@ impl Default for StreamingParams {
             client_addr: None,
             save_loop_num: None,
             recall_loop_num: None,
+            auto_skip: false,
+            auto_switch: false,
         }
     }
 }
@@ -201,10 +205,11 @@ fn main() -> std::io::Result<()> {
     }});
 
     thread::spawn({
+        let send_sock = Arc::clone(&send_sock);
         let streaming_params = streaming_params.clone();
         let sender = sender.clone();
         move || {
-        osc_listener(&addr, streaming_params, sender);
+        osc_listener(send_sock, &addr, streaming_params, sender);
     }});
 
     loop {
@@ -340,6 +345,17 @@ fn video_name_sender(send_sock: Arc<Mutex<UdpSocket>>, streaming_params: Arc<Mut
                 args: vec![params.fps.into()],
             })).unwrap();
             send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
+            // Send auto-states
+            let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
+                addr: "/auto_skip".to_string(),
+                args: vec![params.auto_skip.into()],
+            })).unwrap();
+            send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
+            let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
+                addr: "/auto_switch".to_string(),
+                args: vec![params.auto_switch.into()],
+            })).unwrap();
+            send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
 
             // Send video labels
             let mut i = 5;
@@ -376,7 +392,7 @@ fn video_name_sender(send_sock: Arc<Mutex<UdpSocket>>, streaming_params: Arc<Mut
 
 }
 
-fn osc_listener(addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>, wakeup_main_loop: SyncSender<()>) {
+fn osc_listener(send_sock: Arc<Mutex<UdpSocket>>, addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>, wakeup_main_loop: SyncSender<()>) {
     let sock = UdpSocket::bind(addr).unwrap();
     eprintln!("OSC: Listening to {}", addr);
 
@@ -427,6 +443,33 @@ fn osc_listener(addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>
             },
             "/recall_loop" => {
                 params.recall_loop_num = Some(msg.args[0].clone().int().ok_or(())? as usize);
+            },
+            "/auto_skip" => {
+                params.auto_skip = msg.args[0].clone().bool().ok_or(())?;
+            },
+            "/auto_switch" => {
+                params.auto_switch = !params.auto_switch;
+            },
+            "/beat" => {
+                if params.auto_skip {
+                    params.skip_frames = Some(20);
+                    wake_main_loop();
+                }
+                if let Some(client_addr) = params.client_addr {
+                    // Send beat
+                    let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
+                        addr: "/beat".to_string(),
+                        args: vec![OscType::Int(1)],
+                    })).unwrap();
+                    send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
+                    let fifty_millis = Duration::from_millis(50);
+                    thread::sleep(fifty_millis);
+                    let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
+                        addr: "/beat".to_string(),
+                        args: vec![OscType::Int(0)],
+                    })).unwrap();
+                    send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
+                }
             }
             _ => {
                 eprintln!("Unhandled OSC address: {}", msg.addr);
@@ -442,8 +485,10 @@ fn osc_listener(addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>
             Ok((size, client_addr)) => {
                 let packet = rosc::decoder::decode(&buf[..size]).unwrap();
                 let mut params = streaming_params.lock().unwrap();
-                params.client_addr = Some(client_addr);
-
+                if params.client_addr == None || !client_addr.ip().is_loopback() {
+                    params.client_addr = Some(client_addr);
+                    eprintln!("updated client_addr");
+                }
                 let parse_result = match packet {
                     OscPacket::Message(ref msg) => {
                         parse_message(&msg, &mut params)
