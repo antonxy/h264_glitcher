@@ -317,8 +317,15 @@ fn main() -> std::io::Result<()> {
             if let Ok(mut nal_unit) = nal_unit {
                 if nal_unit.nal_unit_type != NALUnitType::CodedSliceIdr || params.pass_iframe {
                     write_frame(&nal_unit)?;
+                    let is_picture_data = match nal_unit.nal_unit_type {
+                        NALUnitType::CodedSliceIdr | NALUnitType::CodedSliceNonIdr => { true },
+                        _ => { false },
+                    };
                     if params.record_loop {
                         loop_buf.push(nal_unit);
+                    }
+                    if !is_picture_data {
+                        continue; //Only sleep if the nal_unit is a video frame
                     }
                 } else {
                     continue; //If we didn't send out frame don't sleep
