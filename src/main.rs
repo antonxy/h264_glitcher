@@ -466,7 +466,7 @@ fn beat_thread(beat_predictor: Arc<Mutex<BeatPredictor>>, switch_history: Arc<Mu
                 if params.auto_switch_n > 0 {
                     let switch_history = switch_history.lock().unwrap();
                     auto_switch_num += 1;
-                    if auto_switch_num >= switch_history.len() || auto_switch_num >= params.auto_switch_n {
+                    if auto_switch_num >= switch_history.len() || auto_switch_num > params.auto_switch_n {
                         auto_switch_num = 0;
                     }
                     if switch_history.len() > 0 {
