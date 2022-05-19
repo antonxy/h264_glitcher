@@ -50,6 +50,7 @@ struct StreamingParams {
     play_loop: bool,
     loop_ping_pong: bool,
     cut_loop: Option<f32>,
+    restart_loop: bool,
     pass_iframe: bool,
     drop_frames: bool,
     skip_frames: Option<usize>,
@@ -59,6 +60,7 @@ struct StreamingParams {
     recall_loop_num: Option<usize>,
     auto_skip: bool,
     auto_switch_n: usize,
+    loop_to_beat: bool,
     beat_offset: Duration,
 }
 
@@ -70,6 +72,7 @@ impl Default for StreamingParams {
             play_loop: false,
             loop_ping_pong: false,
             cut_loop: None,
+            restart_loop: false,
             pass_iframe: false,
             drop_frames: false,
             skip_frames: None,
@@ -79,6 +82,7 @@ impl Default for StreamingParams {
             recall_loop_num: None,
             auto_skip: false,
             auto_switch_n: 0,
+            loop_to_beat: false,
             beat_offset: Duration::from_millis(0),
         }
     }
@@ -267,6 +271,11 @@ fn main() -> std::io::Result<()> {
             let new_len = (loop_buf.len() as f32 * cut_loop) as usize + 1;
             loop_buf.truncate(new_len);
             streaming_params.lock().unwrap().cut_loop = None;
+        }
+
+        if params.restart_loop {
+            loop_i = 0;
+            streaming_params.lock().unwrap().restart_loop = false;
         }
 
         // Now the state based stuff
@@ -474,6 +483,10 @@ fn beat_thread(beat_predictor: Arc<Mutex<BeatPredictor>>, switch_history: Arc<Mu
                         wake_main_loop();
                     }
                 }
+
+                if params.loop_to_beat {
+                    params.restart_loop = true;
+                }
             }
         } else {
             std::thread::sleep(Duration::from_millis(100));
@@ -545,6 +558,9 @@ fn osc_listener(beat_predictor: Arc<Mutex<BeatPredictor>>, switch_history: Arc<M
             },
             "/auto_switch" => {
                 params.auto_switch_n = msg.args[0].clone().int().ok_or(())? as usize;
+            },
+            "/loop_to_beat" => {
+                params.loop_to_beat = msg.args[0].clone().bool().ok_or(())?;
             },
             "/beat" => {
                 beat_predictor.lock().unwrap().put_input_beat();
