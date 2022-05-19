@@ -59,7 +59,6 @@ struct StreamingParams {
     recall_loop_num: Option<usize>,
     auto_skip: bool,
     auto_switch_n: usize,
-    auto_switch: bool,
     beat_offset: Duration,
 }
 
@@ -80,7 +79,6 @@ impl Default for StreamingParams {
             recall_loop_num: None,
             auto_skip: false,
             auto_switch_n: 0,
-            auto_switch: false,
             beat_offset: Duration::from_millis(0),
         }
     }
@@ -213,21 +211,26 @@ fn main() -> std::io::Result<()> {
 
     let beat_predictor = BeatPredictor::new();
     let beat_predictor = Arc::new(Mutex::new(beat_predictor));
+    let switch_history: VecDeque<usize> = VecDeque::with_capacity(5);
+    let switch_history = Arc::new(Mutex::new(switch_history));
     thread::spawn({
         let send_sock = Arc::clone(&send_sock);
         let streaming_params = streaming_params.clone();
         let sender = sender.clone();
         let beat_predictor = beat_predictor.clone();
+        let switch_history = switch_history.clone();
         move || {
-        beat_thread(beat_predictor, send_sock, &addr, streaming_params, sender);
+        beat_thread(beat_predictor, switch_history, send_sock, &addr, streaming_params, sender);
     }});
 
     thread::spawn({
         let send_sock = Arc::clone(&send_sock);
         let streaming_params = streaming_params.clone();
         let sender = sender.clone();
+        let beat_predictor = beat_predictor.clone();
+        let switch_history = switch_history.clone();
         move || {
-        osc_listener(beat_predictor, send_sock, &addr, streaming_params, sender);
+        osc_listener(beat_predictor, switch_history, send_sock, &addr, streaming_params, sender);
     }});
 
     loop {
@@ -422,7 +425,7 @@ fn video_name_sender(send_sock: Arc<Mutex<UdpSocket>>, streaming_params: Arc<Mut
 
 }
 
-fn beat_thread(beat_predictor: Arc<Mutex<BeatPredictor>>, send_sock: Arc<Mutex<UdpSocket>>, addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>, wakeup_main_loop: SyncSender<()>) {
+fn beat_thread(beat_predictor: Arc<Mutex<BeatPredictor>>, switch_history: Arc<Mutex<VecDeque<usize>>>, send_sock: Arc<Mutex<UdpSocket>>, addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>, wakeup_main_loop: SyncSender<()>) {
     let wake_main_loop = move || {
         match wakeup_main_loop.try_send(()) {
             Ok(_) => (),
@@ -430,6 +433,8 @@ fn beat_thread(beat_predictor: Arc<Mutex<BeatPredictor>>, send_sock: Arc<Mutex<U
             e @ Err(_) => panic!("{:?}", e),
         }
     };
+
+    let mut auto_switch_num = 0;
 
     loop {
         let params = streaming_params.lock().unwrap().clone();
@@ -457,6 +462,18 @@ fn beat_thread(beat_predictor: Arc<Mutex<BeatPredictor>>, send_sock: Arc<Mutex<U
                     params.skip_frames = Some(20);
                     wake_main_loop();
                 }
+
+                if params.auto_switch_n > 0 {
+                    let switch_history = switch_history.lock().unwrap();
+                    auto_switch_num += 1;
+                    if auto_switch_num > switch_history.len() {
+                        auto_switch_num = 0;
+                    }
+                    if switch_history.len() > 0 {
+                        params.video_num = switch_history[auto_switch_num];
+                        wake_main_loop();
+                    }
+                }
             }
         } else {
             std::thread::sleep(Duration::from_millis(100));
@@ -464,7 +481,7 @@ fn beat_thread(beat_predictor: Arc<Mutex<BeatPredictor>>, send_sock: Arc<Mutex<U
     }
 }
 
-fn osc_listener(beat_predictor: Arc<Mutex<BeatPredictor>>, send_sock: Arc<Mutex<UdpSocket>>, addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>, wakeup_main_loop: SyncSender<()>) {
+fn osc_listener(beat_predictor: Arc<Mutex<BeatPredictor>>, switch_history: Arc<Mutex<VecDeque<usize>>>, send_sock: Arc<Mutex<UdpSocket>>, addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>, wakeup_main_loop: SyncSender<()>) {
     let sock = UdpSocket::bind(addr).unwrap();
     eprintln!("OSC: Listening to {}", addr);
 
@@ -475,8 +492,6 @@ fn osc_listener(beat_predictor: Arc<Mutex<BeatPredictor>>, send_sock: Arc<Mutex<
             e @ Err(_) => panic!("{:?}", e),
         }
     };
-    let mut switch_history: VecDeque<usize> = VecDeque::with_capacity(5);
-
     let mut buf = [0u8; rosc::decoder::MTU];
 
     let parse_message = |msg: &OscMessage, params: &mut StreamingParams, client_addr: SocketAddr, switch_history: &mut VecDeque<usize>| -> Result<(), ()> {
@@ -559,6 +574,7 @@ fn osc_listener(beat_predictor: Arc<Mutex<BeatPredictor>>, send_sock: Arc<Mutex<
             Ok((size, client_addr)) => {
                 let packet = rosc::decoder::decode(&buf[..size]).unwrap();
                 let mut params = streaming_params.lock().unwrap();
+                let mut switch_history = switch_history.lock().unwrap();
                 let parse_result = match packet {
                     OscPacket::Message(ref msg) => {
                         parse_message(&msg, &mut params, client_addr, &mut switch_history)
