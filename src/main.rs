@@ -16,6 +16,7 @@ use std::str::FromStr;
 use std::sync::mpsc::{SyncSender, TrySendError};
 use std::time::{Duration, Instant};
 use std::vec::Vec;
+use std::collections::VecDeque;
 use structopt::StructOpt;
 use std::thread;
 use std::sync::{Mutex, Arc};
@@ -55,7 +56,7 @@ struct StreamingParams {
     save_loop_num: Option<usize>,
     recall_loop_num: Option<usize>,
     auto_skip: bool,
-    auto_switch: bool,
+    auto_switch_n: usize,
 }
 
 impl Default for StreamingParams {
@@ -74,7 +75,7 @@ impl Default for StreamingParams {
             save_loop_num: None,
             recall_loop_num: None,
             auto_skip: false,
-            auto_switch: false,
+            auto_switch_n: 0,
         }
     }
 }
@@ -360,7 +361,7 @@ fn video_name_sender(send_sock: Arc<Mutex<UdpSocket>>, streaming_params: Arc<Mut
             send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
             let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
                 addr: "/auto_switch".to_string(),
-                args: vec![params.auto_switch.into()],
+                args: vec![(params.auto_switch_n as i32).into()],
             })).unwrap();
             send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
 
@@ -410,10 +411,11 @@ fn osc_listener(send_sock: Arc<Mutex<UdpSocket>>, addr: &SocketAddr, streaming_p
             e @ Err(_) => panic!("{:?}", e),
         }
     };
+    let mut switch_history: VecDeque<usize> = VecDeque::with_capacity(5);
 
     let mut buf = [0u8; rosc::decoder::MTU];
 
-    let parse_message = |msg: &OscMessage, params: &mut StreamingParams, client_addr: SocketAddr| -> Result<(), ()> {
+    let parse_message = |msg: &OscMessage, params: &mut StreamingParams, client_addr: SocketAddr, switch_history: &mut VecDeque<usize>| -> Result<(), ()> {
         match msg.addr.as_str() {
             "/set_client_address" => {
                 params.client_addr = Some(client_addr);
@@ -448,6 +450,10 @@ fn osc_listener(send_sock: Arc<Mutex<UdpSocket>>, addr: &SocketAddr, streaming_p
             "/video_num" => {
                 params.video_num = msg.args[0].clone().int().ok_or(())? as usize;
                 wake_main_loop();
+                if switch_history.len() == 5 {
+                    switch_history.pop_back();
+                }
+                switch_history.push_front(params.video_num);
             },
             "/save_loop" => {
                 params.save_loop_num = Some(msg.args[0].clone().int().ok_or(())? as usize);
@@ -459,7 +465,7 @@ fn osc_listener(send_sock: Arc<Mutex<UdpSocket>>, addr: &SocketAddr, streaming_p
                 params.auto_skip = msg.args[0].clone().bool().ok_or(())?;
             },
             "/auto_switch" => {
-                params.auto_switch = !params.auto_switch;
+                params.auto_switch_n = msg.args[0].clone().int().ok_or(())? as usize;
             },
             "/beat" => {
                 if params.auto_skip {
@@ -491,7 +497,7 @@ fn osc_listener(send_sock: Arc<Mutex<UdpSocket>>, addr: &SocketAddr, streaming_p
                 let mut params = streaming_params.lock().unwrap();
                 let parse_result = match packet {
                     OscPacket::Message(ref msg) => {
-                        parse_message(&msg, &mut params, client_addr)
+                        parse_message(&msg, &mut params, client_addr, &mut switch_history)
                     }
                     OscPacket::Bundle(_) => {
                         eprintln!("Received bundle but they are currently not handled");
