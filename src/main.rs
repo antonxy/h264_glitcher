@@ -1,10 +1,12 @@
 pub(crate) mod h264;
 pub(crate) mod nal_iterator;
 pub(crate) mod parse_nal;
+pub(crate) mod beat_predictor;
 
 use crate::parse_nal::*;
 use crate::h264::NALUnitType;
 use crate::nal_iterator::NalIterator;
+use crate::beat_predictor::BeatPredictor;
 
 extern crate structopt;
 
@@ -57,6 +59,8 @@ struct StreamingParams {
     recall_loop_num: Option<usize>,
     auto_skip: bool,
     auto_switch_n: usize,
+    auto_switch: bool,
+    beat_offset: Duration,
 }
 
 impl Default for StreamingParams {
@@ -76,6 +80,8 @@ impl Default for StreamingParams {
             recall_loop_num: None,
             auto_skip: false,
             auto_switch_n: 0,
+            auto_switch: false,
+            beat_offset: Duration::from_millis(0),
         }
     }
 }
@@ -205,12 +211,23 @@ fn main() -> std::io::Result<()> {
         }
     }});
 
+    let beat_predictor = BeatPredictor::new();
+    let beat_predictor = Arc::new(Mutex::new(beat_predictor));
+    thread::spawn({
+        let send_sock = Arc::clone(&send_sock);
+        let streaming_params = streaming_params.clone();
+        let sender = sender.clone();
+        let beat_predictor = beat_predictor.clone();
+        move || {
+        beat_thread(beat_predictor, send_sock, &addr, streaming_params, sender);
+    }});
+
     thread::spawn({
         let send_sock = Arc::clone(&send_sock);
         let streaming_params = streaming_params.clone();
         let sender = sender.clone();
         move || {
-        osc_listener(send_sock, &addr, streaming_params, sender);
+        osc_listener(beat_predictor, send_sock, &addr, streaming_params, sender);
     }});
 
     loop {
@@ -228,7 +245,7 @@ fn main() -> std::io::Result<()> {
             loop_mem.insert(save_loop_num, loop_buf.clone());
             streaming_params.lock().unwrap().save_loop_num = None;
         }
-        
+
         if let Some(recall_loop_num) = params.recall_loop_num {
             loop_mem.get(&recall_loop_num).map(|x| loop_buf = x.clone());
             let mut params_mut = streaming_params.lock().unwrap();
@@ -364,6 +381,11 @@ fn video_name_sender(send_sock: Arc<Mutex<UdpSocket>>, streaming_params: Arc<Mut
                 args: vec![(params.auto_switch_n as i32).into()],
             })).unwrap();
             send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
+            // Send beat_offset
+            let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
+                addr: "/beat_offset".to_string(),
+                args: vec![params.beat_offset.as_secs_f32().into()],
+            })).unwrap();
 
             // Send video labels
             let mut i = 5;
@@ -400,7 +422,40 @@ fn video_name_sender(send_sock: Arc<Mutex<UdpSocket>>, streaming_params: Arc<Mut
 
 }
 
-fn osc_listener(send_sock: Arc<Mutex<UdpSocket>>, addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>, wakeup_main_loop: SyncSender<()>) {
+fn beat_thread(beat_predictor: Arc<Mutex<BeatPredictor>>, send_sock: Arc<Mutex<UdpSocket>>, addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>, wakeup_main_loop: SyncSender<()>) {
+    let wake_main_loop = move || {
+        match wakeup_main_loop.try_send(()) {
+            Ok(_) => (),
+            Err(TrySendError::Full(_)) => (),
+            e @ Err(_) => panic!("{:?}", e),
+        }
+    };
+
+    loop {
+        let params = streaming_params.lock().unwrap().clone();
+        let next_beat_dur = beat_predictor.lock().unwrap().duration_to_next_beat(params.beat_offset);
+        if let Some(next_beat_dur) = next_beat_dur {
+            // Sleep max 100ms so that we don't miss if the beat speed changes from a very low
+            // one to a high one
+            if next_beat_dur > Duration::from_millis(100) {
+                std::thread::sleep(Duration::from_millis(90));
+            } else {
+                std::thread::sleep(next_beat_dur);
+
+                // Do the beat stuff here
+                let mut params = streaming_params.lock().unwrap();
+                if params.auto_skip {
+                    params.skip_frames = Some(20);
+                    wake_main_loop();
+                }
+            }
+        } else {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+}
+
+fn osc_listener(beat_predictor: Arc<Mutex<BeatPredictor>>, send_sock: Arc<Mutex<UdpSocket>>, addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>, wakeup_main_loop: SyncSender<()>) {
     let sock = UdpSocket::bind(addr).unwrap();
     eprintln!("OSC: Listening to {}", addr);
 
@@ -468,10 +523,7 @@ fn osc_listener(send_sock: Arc<Mutex<UdpSocket>>, addr: &SocketAddr, streaming_p
                 params.auto_switch_n = msg.args[0].clone().int().ok_or(())? as usize;
             },
             "/beat" => {
-                if params.auto_skip {
-                    params.skip_frames = Some(20);
-                    wake_main_loop();
-                }
+                beat_predictor.lock().unwrap().put_input_beat();
                 if let Some(client_addr) = params.client_addr {
                     // Send beat
                     let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
@@ -480,7 +532,10 @@ fn osc_listener(send_sock: Arc<Mutex<UdpSocket>>, addr: &SocketAddr, streaming_p
                     })).unwrap();
                     send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
                 }
-            }
+            },
+            "/beat_offset" => {
+                params.beat_offset = Duration::from_secs_f32(msg.args[0].clone().float().ok_or(())?);
+            },
             _ => {
                 eprintln!("Unhandled OSC address: {}", msg.addr);
                 eprintln!("Unhandled OSC arguments: {:?}", msg.args);
