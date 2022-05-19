@@ -442,6 +442,15 @@ fn beat_thread(beat_predictor: Arc<Mutex<BeatPredictor>>, send_sock: Arc<Mutex<U
             } else {
                 std::thread::sleep(next_beat_dur);
 
+                if let Some(client_addr) = params.client_addr {
+                    // Send beat
+                    let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
+                        addr: "/beat_delayed".to_string(),
+                        args: vec![OscType::Int(1)],
+                    })).unwrap();
+                    send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
+                }
+
                 // Do the beat stuff here
                 let mut params = streaming_params.lock().unwrap();
                 if params.auto_skip {
