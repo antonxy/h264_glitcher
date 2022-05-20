@@ -42,7 +42,7 @@ struct Opt {
     rewrite_frame_nums: bool,
 
     #[structopt(long, default_value = "1", help="Slow down input beat")]
-    beat_divider: f32,
+    beat_divider: u32,
 }
 
 
@@ -216,8 +216,7 @@ fn main() -> std::io::Result<()> {
         }
     }});
 
-    let mut beat_predictor = BeatPredictor::new();
-    beat_predictor.divider = opt.beat_divider;
+    let beat_predictor = BeatPredictor::new();
     let beat_predictor = Arc::new(Mutex::new(beat_predictor));
     let switch_history: VecDeque<usize> = VecDeque::with_capacity(5);
     let switch_history = Arc::new(Mutex::new(switch_history));
@@ -237,8 +236,9 @@ fn main() -> std::io::Result<()> {
         let sender = sender.clone();
         let beat_predictor = beat_predictor.clone();
         let switch_history = switch_history.clone();
+        let beat_divider = opt.beat_divider;
         move || {
-        osc_listener(beat_predictor, switch_history, send_sock, &addr, streaming_params, sender);
+        osc_listener(beat_predictor, beat_divider, switch_history, send_sock, &addr, streaming_params, sender);
     }});
 
     loop {
@@ -498,7 +498,7 @@ fn beat_thread(beat_predictor: Arc<Mutex<BeatPredictor>>, switch_history: Arc<Mu
     }
 }
 
-fn osc_listener(beat_predictor: Arc<Mutex<BeatPredictor>>, switch_history: Arc<Mutex<VecDeque<usize>>>, send_sock: Arc<Mutex<UdpSocket>>, addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>, wakeup_main_loop: SyncSender<()>) {
+fn osc_listener(beat_predictor: Arc<Mutex<BeatPredictor>>, beat_divider: u32, switch_history: Arc<Mutex<VecDeque<usize>>>, send_sock: Arc<Mutex<UdpSocket>>, addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>, wakeup_main_loop: SyncSender<()>) {
     let sock = UdpSocket::bind(addr).unwrap();
     eprintln!("OSC: Listening to {}", addr);
 
@@ -510,8 +510,10 @@ fn osc_listener(beat_predictor: Arc<Mutex<BeatPredictor>>, switch_history: Arc<M
         }
     };
     let mut buf = [0u8; rosc::decoder::MTU];
+    
+    let mut beat_i = 0;
 
-    let parse_message = |msg: &OscMessage, params: &mut StreamingParams, client_addr: SocketAddr, switch_history: &mut VecDeque<usize>| -> Result<(), ()> {
+    let mut parse_message = |msg: &OscMessage, params: &mut StreamingParams, client_addr: SocketAddr, switch_history: &mut VecDeque<usize>| -> Result<(), ()> {
         match msg.addr.as_str() {
             "/set_client_address" => {
                 params.client_addr = Some(client_addr);
@@ -567,14 +569,18 @@ fn osc_listener(beat_predictor: Arc<Mutex<BeatPredictor>>, switch_history: Arc<M
                 params.loop_to_beat = msg.args[0].clone().bool().ok_or(())?;
             },
             "/traktor/beat" => {
-                beat_predictor.lock().unwrap().put_input_beat();
-                if let Some(client_addr) = params.client_addr {
-                    // Send beat
-                    let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
-                        addr: "/traktor/beat".to_string(),
-                        args: vec![OscType::Int(1)],
-                    })).unwrap();
-                    send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
+                beat_i += 1;
+                if beat_i >= beat_divider {
+                    beat_i = 0;
+                    beat_predictor.lock().unwrap().put_input_beat();
+                    if let Some(client_addr) = params.client_addr {
+                        // Send beat
+                        let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
+                            addr: "/traktor/beat".to_string(),
+                            args: vec![OscType::Int(1)],
+                        })).unwrap();
+                        send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
+                    }
                 }
             },
             "/beat_offset" => {
