@@ -65,6 +65,7 @@ struct StreamingParams {
     auto_switch_n: usize,
     loop_to_beat: bool,
     beat_offset: Duration,
+    beat_divider: u32,
 }
 
 impl Default for StreamingParams {
@@ -87,6 +88,7 @@ impl Default for StreamingParams {
             auto_switch_n: 0,
             loop_to_beat: false,
             beat_offset: Duration::from_millis(0),
+            beat_divider: 1,
         }
     }
 }
@@ -448,6 +450,7 @@ fn beat_thread(beat_predictor: Arc<Mutex<BeatPredictor>>, switch_history: Arc<Mu
     };
 
     let mut auto_switch_num = 0;
+    let mut beat_num = 0;
 
     loop {
         let params = streaming_params.lock().unwrap().clone();
@@ -460,37 +463,44 @@ fn beat_thread(beat_predictor: Arc<Mutex<BeatPredictor>>, switch_history: Arc<Mu
             } else {
                 std::thread::sleep(next_beat_dur);
 
-                if let Some(client_addr) = params.client_addr {
-                    // Send beat
-                    let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
-                        addr: "/beat_delayed".to_string(),
-                        args: vec![OscType::Int(1)],
-                    })).unwrap();
-                    send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
-                }
+                beat_num += 1;
 
-                // Do the beat stuff here
-                let mut params = streaming_params.lock().unwrap();
-                if params.auto_skip {
-                    params.skip_frames = Some(20);
-                    wake_main_loop();
-                }
+                if beat_num >= params.beat_divider {
+                    beat_num = 0;
 
-                if params.auto_switch_n > 0 {
-                    let switch_history = switch_history.lock().unwrap();
-                    auto_switch_num += 1;
-                    if auto_switch_num >= switch_history.len() || auto_switch_num > params.auto_switch_n {
-                        auto_switch_num = 0;
+                    if let Some(client_addr) = params.client_addr {
+                        // Send beat
+                        let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
+                            addr: "/beat_delayed".to_string(),
+                            args: vec![OscType::Int(1)],
+                        })).unwrap();
+                        send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
                     }
-                    if switch_history.len() > 0 {
-                        params.video_num = switch_history[auto_switch_num];
+
+                    // Do the beat stuff here
+                    let mut params = streaming_params.lock().unwrap();
+                    if params.auto_skip {
+                        params.skip_frames = Some(20);
                         wake_main_loop();
                     }
+
+                    if params.auto_switch_n > 0 {
+                        let switch_history = switch_history.lock().unwrap();
+                        auto_switch_num += 1;
+                        if auto_switch_num >= switch_history.len() || auto_switch_num > params.auto_switch_n {
+                            auto_switch_num = 0;
+                        }
+                        if switch_history.len() > 0 {
+                            params.video_num = switch_history[auto_switch_num];
+                            wake_main_loop();
+                        }
+                    }
+
+                    if params.loop_to_beat {
+                        params.restart_loop = true;
+                    }
                 }
 
-                if params.loop_to_beat {
-                    params.restart_loop = true;
-                }
             }
         } else {
             std::thread::sleep(Duration::from_millis(100));
@@ -510,7 +520,7 @@ fn osc_listener(beat_predictor: Arc<Mutex<BeatPredictor>>, beat_divider: u32, sw
         }
     };
     let mut buf = [0u8; rosc::decoder::MTU];
-    
+
     let mut beat_i = 0;
 
     let mut parse_message = |msg: &OscMessage, params: &mut StreamingParams, client_addr: SocketAddr, switch_history: &mut VecDeque<usize>| -> Result<(), ()> {
@@ -587,8 +597,15 @@ fn osc_listener(beat_predictor: Arc<Mutex<BeatPredictor>>, beat_divider: u32, sw
                 params.beat_offset = Duration::from_secs_f32(msg.args[0].clone().float().ok_or(())?);
             },
             "/beat_multiplicator" => {
-                let mult = f32::powi(2.0, -msg.args[0].clone().int().ok_or(())? + 2);
-                beat_predictor.lock().unwrap().multiplicator = mult;
+                let step = -msg.args[0].clone().int().ok_or(())? + 2;
+                if step > 0 {
+                    beat_predictor.lock().unwrap().multiplicator = 1.0;
+                    params.beat_divider = 1 << step;
+                } else {
+                    let mult = f32::powi(2.0, step);
+                    beat_predictor.lock().unwrap().multiplicator = mult;
+                    params.beat_divider = 1;
+                }
             },
             _ => {
                 eprintln!("Unhandled OSC address: {}", msg.addr);
