@@ -566,12 +566,12 @@ fn osc_listener(beat_predictor: Arc<Mutex<BeatPredictor>>, switch_history: Arc<M
             "/loop_to_beat" => {
                 params.loop_to_beat = msg.args[0].clone().bool().ok_or(())?;
             },
-            "/beat" => {
+            "/traktor/beat" => {
                 beat_predictor.lock().unwrap().put_input_beat();
                 if let Some(client_addr) = params.client_addr {
                     // Send beat
                     let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
-                        addr: "/beat".to_string(),
+                        addr: "/traktor/beat".to_string(),
                         args: vec![OscType::Int(1)],
                     })).unwrap();
                     send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
