@@ -576,6 +576,9 @@ fn osc_listener(beat_predictor: Arc<Mutex<BeatPredictor>>, switch_history: Arc<M
             "/beat_offset" => {
                 params.beat_offset = Duration::from_secs_f32(msg.args[0].clone().float().ok_or(())?);
             },
+            "/beat_multiplicator" => {
+                beat_predictor.lock().unwrap().multiplicator = f32::powi(2.0, msg.args[0].clone().int().ok_or(())?);
+            },
             _ => {
                 eprintln!("Unhandled OSC address: {}", msg.addr);
                 eprintln!("Unhandled OSC arguments: {:?}", msg.args);
