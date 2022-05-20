@@ -40,6 +40,9 @@ struct Opt {
 
     #[structopt(long, help="Rewrite frame_num fields for potentially smoother playback")]
     rewrite_frame_nums: bool,
+
+    #[structopt(long, default_value = "1", help="Slow down input beat")]
+    beat_divider: f32,
 }
 
 
@@ -213,7 +216,8 @@ fn main() -> std::io::Result<()> {
         }
     }});
 
-    let beat_predictor = BeatPredictor::new();
+    let mut beat_predictor = BeatPredictor::new();
+    beat_predictor.divider = opt.beat_divider;
     let beat_predictor = Arc::new(Mutex::new(beat_predictor));
     let switch_history: VecDeque<usize> = VecDeque::with_capacity(5);
     let switch_history = Arc::new(Mutex::new(switch_history));
