@@ -42,7 +42,7 @@ struct Opt {
     rewrite_frame_nums: bool,
 
     #[structopt(long, default_value = "1", help="Slow down input beat")]
-    beat_divider: u32,
+    external_beat_divider: u32,
 }
 
 
@@ -64,6 +64,7 @@ struct StreamingParams {
     auto_skip: bool,
     auto_switch_n: usize,
     loop_to_beat: bool,
+    use_external_beat: bool,
     beat_offset: Duration,
     beat_divider: u32,
 }
@@ -87,6 +88,7 @@ impl Default for StreamingParams {
             auto_skip: false,
             auto_switch_n: 0,
             loop_to_beat: false,
+            use_external_beat: false,
             beat_offset: Duration::from_millis(0),
             beat_divider: 1,
         }
@@ -238,9 +240,9 @@ fn main() -> std::io::Result<()> {
         let sender = sender.clone();
         let beat_predictor = beat_predictor.clone();
         let switch_history = switch_history.clone();
-        let beat_divider = opt.beat_divider;
+        let external_beat_divider = opt.external_beat_divider;
         move || {
-        osc_listener(beat_predictor, beat_divider, switch_history, send_sock, &addr, streaming_params, sender);
+        osc_listener(beat_predictor, external_beat_divider, switch_history, send_sock, &addr, streaming_params, sender);
     }});
 
     loop {
@@ -508,7 +510,7 @@ fn beat_thread(beat_predictor: Arc<Mutex<BeatPredictor>>, switch_history: Arc<Mu
     }
 }
 
-fn osc_listener(beat_predictor: Arc<Mutex<BeatPredictor>>, beat_divider: u32, switch_history: Arc<Mutex<VecDeque<usize>>>, send_sock: Arc<Mutex<UdpSocket>>, addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>, wakeup_main_loop: SyncSender<()>) {
+fn osc_listener(beat_predictor: Arc<Mutex<BeatPredictor>>, external_beat_divider: u32, switch_history: Arc<Mutex<VecDeque<usize>>>, send_sock: Arc<Mutex<UdpSocket>>, addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>, wakeup_main_loop: SyncSender<()>) {
     let sock = UdpSocket::bind(addr).unwrap();
     eprintln!("OSC: Listening to {}", addr);
 
@@ -578,19 +580,31 @@ fn osc_listener(beat_predictor: Arc<Mutex<BeatPredictor>>, beat_divider: u32, sw
             "/loop_to_beat" => {
                 params.loop_to_beat = msg.args[0].clone().bool().ok_or(())?;
             },
-            "/traktor/beat" => {
-                beat_i += 1;
-                if beat_i >= beat_divider {
-                    beat_i = 0;
+            "/use_external_beat" => {
+                params.use_external_beat = msg.args[0].clone().bool().ok_or(())?;
+            },
+            "/manual_beat" => {
+                if !params.use_external_beat {
                     beat_predictor.lock().unwrap().put_input_beat();
-                    if let Some(client_addr) = params.client_addr {
-                        // Send beat
-                        let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
-                            addr: "/traktor/beat".to_string(),
-                            args: vec![OscType::Int(1)],
-                        })).unwrap();
-                        send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
+                }
+            },
+            "/traktor/beat" => {
+                if params.use_external_beat {
+                    beat_i += 1;
+                    if beat_i >= external_beat_divider {
+                        beat_i = 0;
+                        beat_predictor.lock().unwrap().put_input_beat();
+                        if let Some(client_addr) = params.client_addr {
+                            // Send beat
+                            let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
+                                addr: "/traktor/beat".to_string(),
+                                args: vec![OscType::Int(1)],
+                            })).unwrap();
+                            send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
+                        }
                     }
+                } else {
+                    beat_i = 0;
                 }
             },
             "/beat_offset" => {
