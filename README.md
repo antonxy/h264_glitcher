@@ -40,7 +40,7 @@ By default the glitcher listens on port 8000 for OSC messages.
 - `/fps <float>` Set frames per second.
 - `/record_loop <bool>` Loop recording start when true is sent and stops when false is sent. After recording the loop immediately starts playing.
 - `/play_loop <bool>`  Play previously recorded loop.
-- `/pass_iframes <bool>` Lets I-frames through, disabling the glitch effect.
+- `/pass_iframe <bool>` Lets I-frames through, disabling the glitch effect.
 - `/video_num <int>` Loads the n-th video in the list of videos given to `--input`.
 
 ## Ideas
