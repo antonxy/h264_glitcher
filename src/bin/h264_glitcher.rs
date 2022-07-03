@@ -1,12 +1,5 @@
-pub(crate) mod h264;
-pub(crate) mod nal_iterator;
-pub(crate) mod parse_nal;
-pub(crate) mod beat_predictor;
-
-use crate::parse_nal::*;
-use crate::h264::NALUnitType;
-use crate::nal_iterator::NalIterator;
-use crate::beat_predictor::BeatPredictor;
+use h264_glitcher::h264::*;
+use h264_glitcher::beat_predictor::BeatPredictor;
 
 extern crate structopt;
 

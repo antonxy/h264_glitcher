@@ -3,8 +3,15 @@ name = "h264_glitcher"
 version = "0.1.0"
 authors = ["Anton Schirg <anton.schirg@posteo.de>"]
 edition = "2018"
+default-run = "h264_glitcher"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[[bin]]
+name = "h264_glitcher"
+
+[[bin]]
+name = "inspect_video"
 
 [dependencies]
 enum_primitive = "0.1.1"

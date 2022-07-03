@@ -4,7 +4,7 @@ enum_from_primitive! {
     #[derive(Debug, Copy, Clone, PartialEq)]
     #[repr(u8)]
     pub enum NALUnitType {
-        Unpecified = 0,
+        Unspecified = 0,
         CodedSliceNonIdr          = 1,
         CodedSliceDataPartitionA = 2,
         CodedSliceDataPartitionB = 3,

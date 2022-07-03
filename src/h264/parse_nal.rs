@@ -1,6 +1,7 @@
 use crate::h264::NALUnitType;
 use enum_primitive::FromPrimitive;
 use std::io;
+use std::fmt;
 use io::{Write, Cursor, SeekFrom};
 use bitstream_io::{BigEndian, BitWriter, BitWrite, BitReader, BitRead};
 
@@ -22,12 +23,22 @@ impl From<io::Error> for NalParseError {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct NalUnit {
     pub nal_ref_idc : u8,
     pub nal_unit_type: NALUnitType,
     pub rbsp: Vec<u8>,
 }
+
+impl fmt::Display for NalUnit {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        fmt.debug_struct("NalUnit")
+            .field("nal_ref_idc", &self.nal_ref_idc)
+            .field("nal_unit_type", &self.nal_unit_type)
+            .finish()
+    }
+}
+
 
 fn decode_nal_to_rbsp(bytes: &[u8]) -> Vec<u8> {
     let mut rbsp = Vec::with_capacity(bytes.len());
@@ -134,6 +145,7 @@ fn write_ue(writer: &mut impl BitWrite, value: u32) -> io::Result<()> {
     Ok(())
 }
 
+#[derive(Clone, Debug)]
 pub struct SliceHeader {
     pub first_mb_in_slice : u32,
     pub slice_type : u32,
@@ -142,6 +154,18 @@ pub struct SliceHeader {
 
     data: Vec<u8>,
     data_offset: u64,
+}
+
+
+impl fmt::Display for SliceHeader {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        fmt.debug_struct("SliceHeader")
+            .field("first_mb_in_slice", &self.first_mb_in_slice)
+            .field("slice_type", &self.slice_type)
+            .field("pic_parameter_set_id", &self.pic_parameter_set_id)
+            .field("frame_num", &self.frame_num)
+            .finish()
+    }
 }
 
 impl SliceHeader {
@@ -202,10 +226,8 @@ impl SliceHeader {
 
 #[cfg(test)]
 mod test {
-    use crate::NalIterator;
-    use crate::NalUnit;
-    use crate::h264::NALUnitType;
-    use crate::parse_nal::*;
+    use super::*;
+    use crate::h264::NalIterator;
     use std::io::Read;
 
     #[test]

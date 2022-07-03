@@ -62,6 +62,8 @@ where
     type Item = Vec<u8>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        // Skip until we have consumed the first NAL separator.
+        // From then on we can assume the separator has been consumed by the previous invocation.
         if !self.found_nal_last_time {
             take_until_nal_start(&mut self.stream)?;
             self.found_nal_last_time = true;
