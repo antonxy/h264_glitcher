@@ -346,7 +346,9 @@ fn main() -> std::io::Result<()> {
             }
             let (data, nal_unit) = frame.unwrap();
             if let Ok(mut nal_unit) = nal_unit {
-                if nal_unit.nal_unit_type != NALUnitType::CodedSliceIdr || params.pass_iframe {
+                // If pass_iframe is not activated, send only CodedSliceNonIdr
+                // Sending a new SPS without an Idr Slice seems to cause problems when switching between some videos
+                if nal_unit.nal_unit_type == NALUnitType::CodedSliceNonIdr || params.pass_iframe {
                     write_frame(&nal_unit)?;
                     let is_picture_data = match nal_unit.nal_unit_type {
                         NALUnitType::CodedSliceIdr | NALUnitType::CodedSliceNonIdr => { true },
