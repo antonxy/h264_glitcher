@@ -42,8 +42,7 @@ pub struct Sps {
     pub mb_adaptive_frame_field_flag : bool,
     pub direct_8x8_inference_flag : bool,
     pub frame_crop_offset : Option<(u32, u32, u32, u32)>, // left, right, top, bottom
-    //pub vui_parameters_present_flag: bool, //unimplemented
-
+    pub vui_parameters: Option<VuiParameters>,
 }
 
 
@@ -113,9 +112,10 @@ impl Sps {
 
         // vui_parameters_present_flag
         // Annex E - may be ignored by decoders, but maybe its important to pass this on to mpv? I'm not sure
-        //if reader.read_bit()? {
-        //    return Err(ParseError::Unimplemented);
-        //}
+        let mut vui_parameters = None;
+        if reader.read_bit()? {
+            vui_parameters = Some(VuiParameters::read(reader)?);
+        }
 
         //TODO RBSP trailing bits. Or do that outside?
 
@@ -146,6 +146,7 @@ impl Sps {
             mb_adaptive_frame_field_flag,
             direct_8x8_inference_flag,
             frame_crop_offset,
+            vui_parameters,
         })
     }
 
@@ -211,9 +212,8 @@ impl Sps {
 
         // vui_parameters_present_flag
         // Annex E - may be ignored by decoders, but maybe its important to pass this on to mpv? I'm not sure
-        //if reader.read_bit()? {
-        //    return Err(ParseError::Unimplemented);
-        //}
+        writer.write_bit(false)?;
+        //TODO implement vui parameter writing
 
         writer.byte_align()?;
 
@@ -221,6 +221,217 @@ impl Sps {
         Ok(())
     }
 }
+
+#[derive(Clone, Debug)]
+pub struct VideoSignalType {
+    pub video_format: u8,
+    pub video_full_range_flag: bool,
+    pub colour_description: Option<ColourDescription>,
+}
+
+impl VideoSignalType {
+    pub fn read(reader: &mut impl BitRead) -> Result<Self, ParseError> {
+        let video_format = reader.read(3)?;
+        let video_full_range_flag = reader.read_bit()?;
+        let mut colour_description = None;
+        if reader.read_bit()? {
+            colour_description = Some(ColourDescription::read(reader)?);
+        }
+
+        Ok(Self{
+            video_format,
+            video_full_range_flag,
+            colour_description,
+        })
+    }
+    pub fn write(&self, writer: &mut impl BitWrite) -> std::io::Result<()> {
+        unimplemented!();
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ColourDescription {
+    pub colour_primaries: u8,
+    pub transfer_characteristics: u8,
+    pub matrix_coefficients: u8,
+}
+
+impl ColourDescription {
+    pub fn read(reader: &mut impl BitRead) -> Result<Self, ParseError> {
+        let colour_primaries = reader.read(8)?;
+        let transfer_characteristics = reader.read(8)?;
+        let matrix_coefficients = reader.read(8)?;
+
+        Ok(Self{
+            colour_primaries,
+            transfer_characteristics,
+            matrix_coefficients,
+        })
+    }
+    pub fn write(&self, writer: &mut impl BitWrite) -> std::io::Result<()> {
+        unimplemented!();
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ChromaLocInfo {
+    pub chroma_sample_loc_type_top_field: u32,
+    pub chroma_sample_loc_type_bottom_field: u32,
+}
+
+impl ChromaLocInfo {
+    pub fn read(reader: &mut impl BitRead) -> Result<Self, ParseError> {
+        let chroma_sample_loc_type_top_field = read_ue(reader)?;
+        let chroma_sample_loc_type_bottom_field = read_ue(reader)?;
+
+        Ok(Self{
+            chroma_sample_loc_type_top_field,
+            chroma_sample_loc_type_bottom_field,
+        })
+    }
+    pub fn write(&self, writer: &mut impl BitWrite) -> std::io::Result<()> {
+        unimplemented!();
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct TimingInfo {
+    pub num_units_in_tick: u32,
+    pub time_scale: u32,
+    pub fixed_frame_rate_flag: bool,
+}
+
+impl TimingInfo {
+    pub fn read(reader: &mut impl BitRead) -> Result<Self, ParseError> {
+        let num_units_in_tick = reader.read(32)?;
+        let time_scale = reader.read(32)?;
+        let fixed_frame_rate_flag = reader.read_bit()?;
+
+        Ok(Self{
+            num_units_in_tick,
+            time_scale,
+            fixed_frame_rate_flag,
+        })
+    }
+    pub fn write(&self, writer: &mut impl BitWrite) -> std::io::Result<()> {
+        unimplemented!();
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct BitstreamRestriction {
+    pub motion_vectors_over_pic_boundaries_flag: bool,
+    pub max_bytes_per_pic_denom: u32,
+    pub max_bits_per_mb_denom: u32,
+    pub log2_max_mv_length_horizontal: u32,
+    pub log2_max_mv_length_vertical: u32,
+    pub max_num_reorder_frames: u32,
+    pub max_dec_frame_buffering: u32,
+}
+
+impl BitstreamRestriction {
+    pub fn read(reader: &mut impl BitRead) -> Result<Self, ParseError> {
+        let motion_vectors_over_pic_boundaries_flag = reader.read_bit()?;
+        let max_bytes_per_pic_denom = read_ue(reader)?;
+        let max_bits_per_mb_denom = read_ue(reader)?;
+        let log2_max_mv_length_horizontal = read_ue(reader)?;
+        let log2_max_mv_length_vertical = read_ue(reader)?;
+        let max_num_reorder_frames = read_ue(reader)?;
+        let max_dec_frame_buffering = read_ue(reader)?;
+
+        Ok(Self{
+            motion_vectors_over_pic_boundaries_flag,
+            max_bytes_per_pic_denom,
+            max_bits_per_mb_denom,
+            log2_max_mv_length_horizontal,
+            log2_max_mv_length_vertical,
+            max_num_reorder_frames,
+            max_dec_frame_buffering,
+        })
+    }
+    pub fn write(&self, writer: &mut impl BitWrite) -> std::io::Result<()> {
+        unimplemented!();
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct VuiParameters {
+    pub aspect_ratio_idc : Option<u8>,
+    pub overscan_appropriate_flag : Option<bool>,
+    pub video_signal_type: Option<VideoSignalType>,
+    pub chroma_loc_info: Option<ChromaLocInfo>,
+    pub timing_info: Option<TimingInfo>,
+    pub pic_struct_present_flag: bool,
+    pub bitstream_restriction: Option<BitstreamRestriction>,
+}
+
+impl VuiParameters {
+    pub fn read(reader: &mut impl BitRead) -> Result<Self, ParseError> {
+        let mut aspect_ratio_idc = None;
+        if reader.read_bit()? {
+            let idc = reader.read::<u8>(8)?;
+            if idc == 255 {
+                return Err(ParseError::Unimplemented); // Extended_SAR
+            }
+            aspect_ratio_idc = Some(idc);
+        }
+
+        let mut overscan_appropriate_flag = None;
+        if reader.read_bit()? {
+            overscan_appropriate_flag = Some(reader.read_bit()?);
+        }
+
+        let mut video_signal_type = None;
+        if reader.read_bit()? {
+            video_signal_type = Some(VideoSignalType::read(reader)?);
+        }
+
+        let mut chroma_loc_info = None;
+        if reader.read_bit()? {
+            chroma_loc_info = Some(ChromaLocInfo::read(reader)?);
+        }
+
+        let mut timing_info = None;
+        if reader.read_bit()? {
+            timing_info = Some(TimingInfo::read(reader)?);
+        }
+
+        //TODO
+        //nal_hrd_parameters_present_flag
+        if reader.read_bit()? {
+            return Err(ParseError::Unimplemented);
+        }
+        
+        //vcl_hrd_parameters_present_flag
+        if reader.read_bit()? {
+            return Err(ParseError::Unimplemented);
+        }
+
+        //if( nal_hrd_parameters_present_flag || vcl_hrd_parameters_present_flag ) low_delay_hrd_flag
+
+        let pic_struct_present_flag = reader.read_bit()?;
+
+        let mut bitstream_restriction = None;
+        if reader.read_bit()? {
+            bitstream_restriction = Some(BitstreamRestriction::read(reader)?);
+        }
+
+        Ok(Self {
+            aspect_ratio_idc,
+            overscan_appropriate_flag,
+            video_signal_type,
+            chroma_loc_info,
+            timing_info,
+            pic_struct_present_flag,
+            bitstream_restriction
+        })
+    }
+    pub fn write(&self, writer: &mut impl BitWrite) -> std::io::Result<()> {
+        unimplemented!();
+    }
+}
+
+
 
 #[cfg(test)]
 mod test {
