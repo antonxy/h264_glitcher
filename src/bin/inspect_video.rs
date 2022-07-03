@@ -3,8 +3,8 @@ use std::fs::File;
 use structopt::StructOpt;
 use std::path::PathBuf;
 use std::io::Read;
-
-use h264_glitcher::h264::{NalIterator, NalUnit, NALUnitType, SliceHeader};
+use bitstream_io::{BitReader, BigEndian};
+use h264_glitcher::h264::{NalIterator, NalUnit, NALUnitType, SliceHeader, Sps};
 
 
 #[derive(Debug, StructOpt)]
@@ -36,6 +36,14 @@ fn main() -> std::io::Result<()> {
             Ok(nal_unit) => {
                 println!("{}", nal_unit);
                 match nal_unit.nal_unit_type {
+                    NALUnitType::Sps => {
+                        let sps = Sps::read(&mut BitReader::endian(nal_unit.rbsp.as_slice(), BigEndian));
+                        println!("{:?}", nal_unit.rbsp);
+                        match sps {
+                            Err(e) => println!("Failed to parse SPS: {:?}", e),
+                            Ok(sps) => println!("{:?}", sps)
+                        }
+                    }
                     NALUnitType::CodedSliceIdr | NALUnitType::CodedSliceNonIdr => {
                         let header = SliceHeader::from_bytes(&nal_unit.rbsp);
                         match header {
