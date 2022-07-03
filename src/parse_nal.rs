@@ -1,21 +1,23 @@
 use crate::h264::NALUnitType;
 use enum_primitive::FromPrimitive;
-use bitreader::{BitReader, BitReaderError};
-use std::io::Write;
-use bitstream_io::{BigEndian, BitWriter, BitWrite};
+use std::io;
+use io::{Write, Cursor, SeekFrom};
+use bitstream_io::{BigEndian, BitWriter, BitWrite, BitReader, BitRead};
 
 #[derive(Debug)]
 pub enum NalParseError {
     EndOfStream,
     InvalidData,
+    IoError(io::Error),
     Unimplemented
 }
 
-impl From<BitReaderError> for NalParseError {
-    fn from(e: BitReaderError) -> Self {
-        match e {
-            BitReaderError::NotEnoughData{..} => { Self::EndOfStream },
-            BitReaderError::TooManyBitsForType{..} => { panic!("Programming error: {:?}", e) }
+impl From<io::Error> for NalParseError {
+    fn from(e: io::Error) -> Self {
+        if e.kind() == io::ErrorKind::UnexpectedEof {
+            Self::EndOfStream
+        } else {
+            Self::IoError(e)
         }
     }
 }
@@ -68,14 +70,14 @@ fn encode_rbsp_to_nal(bytes: &[u8]) -> Vec<u8> {
 
 impl NalUnit {
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, NalParseError> {
-        let mut reader = BitReader::new(bytes);
+        let mut reader = BitReader::endian(bytes, BigEndian);
 
-        if reader.read_bool()? != false { //forbidden_zero_bit
+        if reader.read_bit()? != false { //forbidden_zero_bit
             return Err(NalParseError::InvalidData);
         }
 
-        let nal_ref_idc = reader.read_u8(2)?;
-        let nal_unit_type = reader.read_u8(5)?;
+        let nal_ref_idc = reader.read(2)?;
+        let nal_unit_type = reader.read(5)?;
 
         let nal_unit_header_bytes = 1;
 
@@ -108,10 +110,10 @@ impl NalUnit {
     }
 }
 
-fn read_ue(reader: &mut BitReader) -> Result<u32, NalParseError> {
+fn read_ue(reader: &mut impl BitRead) -> Result<u32, NalParseError> {
     let mut leading_zero_bits = 0;
     loop {
-        if reader.read_bool()? {
+        if reader.read_bit()? {
             break;
         }
         leading_zero_bits += 1;
@@ -120,15 +122,15 @@ fn read_ue(reader: &mut BitReader) -> Result<u32, NalParseError> {
     if leading_zero_bits > 32 {
         return Err(NalParseError::Unimplemented);
     }
-    let bits = reader.read_u32(leading_zero_bits as u8)?;
+    let bits = reader.read::<u32>(leading_zero_bits)?;
     Ok((1 << leading_zero_bits) - 1 + bits)
 }
 
-fn write_ue(writer: &mut impl BitWrite, value: u32) -> std::io::Result<()> {
+fn write_ue(writer: &mut impl BitWrite, value: u32) -> io::Result<()> {
     let leading_zero_bits : u32 = ((value + 1) as f64).log2() as u32;
     writer.write(leading_zero_bits, 0)?;
     writer.write_bit(true)?;
-    writer.write(leading_zero_bits, value - ( 1 << leading_zero_bits ) + 1 )?;
+    writer.write(leading_zero_bits, value + 1 - ( 1 << leading_zero_bits ))?;
     Ok(())
 }
 
@@ -144,18 +146,18 @@ pub struct SliceHeader {
 
 impl SliceHeader {
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, NalParseError> {
-        let mut reader = BitReader::new(bytes);
+        let mut reader = BitReader::endian(Cursor::new(bytes), BigEndian);
         let first_mb_in_slice = read_ue(&mut reader)?;
         let slice_type = read_ue(&mut reader)?;
         let pic_parameter_set_id = read_ue(&mut reader)?;
 
         let separate_colour_plane_flag = false; //TODO actually get this from SPS
         if separate_colour_plane_flag {
-            let colour_plane_id = reader.read_u8(2)?;
+            let colour_plane_id = reader.read::<u8>(2)?;
         }
 
         let frame_num_bits = 4; //TODO actually get this from SPS
-        let frame_num = reader.read_u32(frame_num_bits)?;
+        let frame_num = reader.read(frame_num_bits)?;
 
         Ok(Self {
             first_mb_in_slice,
@@ -163,7 +165,7 @@ impl SliceHeader {
             pic_parameter_set_id,
             frame_num,
             data : bytes.into(),
-            data_offset : reader.position(),
+            data_offset : reader.position_in_bits()?,
         })
     }
 
@@ -180,11 +182,15 @@ impl SliceHeader {
         //TODO variable size
         writer.write(4, self.frame_num).unwrap();
 
-        // TODO this is highly inefficient
-        let mut reader = BitReader::new(&self.data);
-        reader.skip(self.data_offset).unwrap();
-        while reader.remaining() > 0 {
-            writer.write_bit(reader.read_bool().unwrap()).unwrap();
+        // TODO this is probably highly inefficient
+        let mut reader = BitReader::endian(Cursor::new(&self.data), BigEndian);
+        reader.seek_bits(SeekFrom::Start(self.data_offset)).unwrap();
+        loop {
+            match reader.read_bit() {
+                Err(ref e) if e.kind() == io::ErrorKind::UnexpectedEof => break,
+                Err(e) => panic!("Read failed from vec: {}", e),
+                Ok(bit) => writer.write_bit(bit).unwrap(),
+            }
         }
 
         writer.byte_align().unwrap();
@@ -201,14 +207,20 @@ mod test {
     use crate::h264::NALUnitType;
     use crate::parse_nal::*;
     use std::io::Read;
-    use bitreader::BitReader;
 
     #[test]
     fn read_ue_test() {
-        assert_eq!(read_ue(&mut BitReader::new(&[0b11101000])).unwrap(), 0); //1 - 0
-        assert_eq!(read_ue(&mut BitReader::new(&[0b01001000])).unwrap(), 1); //010 - 1
-        assert_eq!(read_ue(&mut BitReader::new(&[0b01101000])).unwrap(), 2); //011 - 1
-        assert_eq!(read_ue(&mut BitReader::new(&[0b00001000, 0b10000000])).unwrap(), 16); //000010001 - 16
+        let data : &[u8] = &[0b11101000];
+        assert_eq!(read_ue(&mut BitReader::endian(data, BigEndian)).unwrap(), 0); //1 - 0
+
+        let data : &[u8] = &[0b01001000];
+        assert_eq!(read_ue(&mut BitReader::endian(data, BigEndian)).unwrap(), 1); //010 - 1
+
+        let data : &[u8] = &[0b01101000];
+        assert_eq!(read_ue(&mut BitReader::endian(data, BigEndian)).unwrap(), 2); //011 - 2
+
+        let data : &[u8] = &[0b00001000, 0b10000000];
+        assert_eq!(read_ue(&mut BitReader::endian(data, BigEndian)).unwrap(), 16); //000010001 - 16
     }
 
     #[test]
@@ -217,8 +229,8 @@ mod test {
             let mut vec = Vec::new();
             let mut writer = BitWriter::endian(&mut vec, BigEndian);
             write_ue(&mut writer, i).unwrap();
-            writer.byte_align();
-            assert_eq!(read_ue(&mut BitReader::new(&vec)).unwrap(), i);
+            writer.byte_align().unwrap();
+            assert_eq!(read_ue(&mut BitReader::endian(vec.as_slice(), BigEndian)).unwrap(), i);
         }
     }
 
