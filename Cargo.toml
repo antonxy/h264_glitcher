@@ -13,6 +13,9 @@ name = "h264_glitcher"
 [[bin]]
 name = "inspect_video"
 
+[[bin]]
+name = "validate_video_parameters"
+
 [dependencies]
 enum_primitive = "0.1.1"
 rand = "0.8"
@@ -21,3 +24,5 @@ rosc = "0.6"
 itertools = "0.10"
 spin_sleep = "1"
 bitstream-io = "1"
+visit_diff = "0.1"
+colored = "2"

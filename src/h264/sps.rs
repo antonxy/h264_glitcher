@@ -1,15 +1,16 @@
 use crate::h264::{ParseError, read_ue, write_ue, read_optional, write_optional, read_rbsp_trailing_bits, write_rbsp_trailing_bits};
 use std::convert::TryInto;
 use bitstream_io::{BitWrite, BitRead};
+use visit_diff::Diff;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Diff, PartialEq)]
 pub enum PicOrderCntType {
     Type0(u8), // log2_max_pic_order_cnt_lsb_minus4// 0 to 12
     //Type1, //unimplemented
     Type2,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Diff, PartialEq)]
 pub struct Sps {
     pub profile_idc : u8,
     pub constraint_set0_flag : bool,
@@ -212,7 +213,7 @@ impl Sps {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Diff, PartialEq)]
 pub struct VideoSignalType {
     pub video_format: u8,
     pub video_full_range_flag: bool,
@@ -239,7 +240,7 @@ impl VideoSignalType {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Diff, PartialEq)]
 pub struct ColourDescription {
     pub colour_primaries: u8,
     pub transfer_characteristics: u8,
@@ -266,7 +267,7 @@ impl ColourDescription {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Diff, PartialEq)]
 pub struct ChromaLocInfo {
     pub chroma_sample_loc_type_top_field: u32,
     pub chroma_sample_loc_type_bottom_field: u32,
@@ -289,7 +290,7 @@ impl ChromaLocInfo {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Diff, PartialEq)]
 pub struct TimingInfo {
     pub num_units_in_tick: u32,
     pub time_scale: u32,
@@ -316,7 +317,7 @@ impl TimingInfo {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Diff, PartialEq)]
 pub struct BitstreamRestriction {
     pub motion_vectors_over_pic_boundaries_flag: bool,
     pub max_bytes_per_pic_denom: u32,
@@ -359,7 +360,7 @@ impl BitstreamRestriction {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Diff, PartialEq)]
 pub struct VuiParameters {
     pub aspect_ratio_idc : Option<u8>,
     pub overscan_appropriate_flag : Option<bool>,
