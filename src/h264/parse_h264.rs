@@ -20,7 +20,7 @@ impl From<io::Error> for ParseError {
     }
 }
 
-
+//TODO could make a version that is generic in return type and checks range based on return type range
 pub fn read_ue(reader: &mut impl BitRead) -> Result<u32, ParseError> {
     let mut leading_zero_bits = 0;
     loop {
@@ -43,6 +43,47 @@ pub fn write_ue(writer: &mut impl BitWrite, value: u32) -> io::Result<()> {
     writer.write_bit(true)?;
     writer.write(leading_zero_bits, value + 1 - ( 1 << leading_zero_bits ))?;
     Ok(())
+}
+
+pub fn read_optional<T, R, F>(reader: &mut R, read_contents: F) -> Result<Option<T>, ParseError>
+where
+    R: BitRead,
+    F: FnOnce(&mut R) -> Result<T, ParseError>
+{
+    if reader.read_bit()? {
+        Ok(Some(read_contents(reader)?))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn write_optional<T, W, F>(writer: &mut W, opt: &Option<T>, write_contents: F) -> io::Result<()>
+where
+    W: BitWrite,
+    F: FnOnce(&mut W, &T) -> io::Result<()>
+{
+    writer.write_bit(opt.is_some())?;
+    if let Some(val) = opt {
+        write_contents(writer, val)?;
+    }
+    Ok(())
+}
+
+pub fn read_rbsp_trailing_bits(reader: &mut impl BitRead) -> Result<(), ParseError> {
+    if !reader.read_bit()? {
+        return Err(ParseError::InvalidData);
+    }
+    while !reader.byte_aligned() {
+        if reader.read_bit()? {
+            return Err(ParseError::InvalidData);
+        }
+    }
+    Ok(())
+}
+
+pub fn write_rbsp_trailing_bits(writer: &mut impl BitWrite) -> io::Result<()> {
+    writer.write_bit(true)?;
+    writer.byte_align()
 }
 
 
