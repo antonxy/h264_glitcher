@@ -1,7 +1,7 @@
 extern crate structopt;
 use bitstream_io::{BigEndian, BitReader};
 use colored::Colorize;
-use h264_glitcher::h264::{NALUnitType, NalIterator, NalUnit, Sps};
+use h264_glitcher::h264::{NALUnitType, NalIterator, NalUnit, Pps, Sps};
 use std::fs::File;
 use std::io::Read;
 use std::path::PathBuf;
@@ -53,6 +53,7 @@ fn main() -> std::io::Result<()> {
     let opt = Opt::from_args();
 
     let mut reference_sps = None;
+    let mut reference_pps = None;
 
     let open_video_file = |path| -> Result<_, std::io::Error> {
         let input_file = File::open(path)?;
@@ -85,6 +86,24 @@ fn main() -> std::io::Result<()> {
                         }
                     }
                 }
+                NALUnitType::Pps => {
+                    let pps =
+                        Pps::read(&mut BitReader::endian(nal_unit.rbsp.as_slice(), BigEndian));
+                    match pps {
+                        Err(e) => println!("Failed to parse reference PPS: {:?}", e),
+                        Ok(pps) => {
+                            println!(
+                                "Reference video file {:?}: {}",
+                                opt.reference,
+                                "Found reference PPS".green()
+                            );
+                            if opt.diff {
+                                println!("{:#?}", pps);
+                            }
+                            reference_pps = Some(pps);
+                        }
+                    }
+                }
                 _ => {}
             },
         }
@@ -96,6 +115,7 @@ fn main() -> std::io::Result<()> {
     }
 
     let reference_sps = reference_sps.unwrap();
+    let reference_pps = reference_pps.unwrap();
 
     // Ignore directories
     let paths: Vec<PathBuf> = opt.input.into_iter().filter(|p| p.is_file()).collect();
@@ -104,39 +124,52 @@ fn main() -> std::io::Result<()> {
         for nal_unit in open_video_file(path.clone())? {
             match nal_unit {
                 Err(e) => println!("Failed to parse NAL: {:?}", e),
-                Ok(nal_unit) => {
-                    match nal_unit.nal_unit_type {
-                        NALUnitType::Sps => {
-                            let sps = Sps::read(&mut BitReader::endian(
-                                nal_unit.rbsp.as_slice(),
-                                BigEndian,
-                            ));
-                            match sps {
-                                Err(e) => println!("Failed to parse SPS: {:?}", e),
-                                Ok(sps) => {
-                                    if sps != reference_sps {
-                                        println!(
-                                            "Video file {:?}: {}",
-                                            path,
-                                            "SPS differs from reference".red()
-                                        );
-                                        if opt.diff {
-                                            diff_printing::print_diff(&reference_sps, &sps);
-                                        }
-                                    } else {
-                                        println!("Video file {:?}: {}", path, "Same SPS".green());
+                Ok(nal_unit) => match nal_unit.nal_unit_type {
+                    NALUnitType::Sps => {
+                        let sps =
+                            Sps::read(&mut BitReader::endian(nal_unit.rbsp.as_slice(), BigEndian));
+                        match sps {
+                            Err(e) => println!("Failed to parse SPS: {:?}", e),
+                            Ok(sps) => {
+                                if sps != reference_sps {
+                                    println!(
+                                        "Video file {:?}: {}",
+                                        path,
+                                        "SPS differs from reference".red()
+                                    );
+                                    if opt.diff {
+                                        diff_printing::print_diff(&reference_sps, &sps);
                                     }
-                                    check_for_assumptions(&sps);
+                                } else {
+                                    println!("Video file {:?}: {}", path, "Same SPS".green());
+                                }
+                                check_for_assumptions(&sps);
+                            }
+                        }
+                    }
+                    NALUnitType::Pps => {
+                        let pps =
+                            Pps::read(&mut BitReader::endian(nal_unit.rbsp.as_slice(), BigEndian));
+                        match pps {
+                            Err(e) => println!("Failed to parse PPS: {:?}", e),
+                            Ok(pps) => {
+                                if pps != reference_pps {
+                                    println!(
+                                        "Video file {:?}: {}",
+                                        path,
+                                        "PPS differs from reference".red()
+                                    );
+                                    if opt.diff {
+                                        diff_printing::print_diff(&reference_pps, &pps);
+                                    }
+                                } else {
+                                    println!("Video file {:?}: {}", path, "Same PPS".green());
                                 }
                             }
                         }
-                        NALUnitType::Pps => {
-                            //TODO compare PPS too
-                            //println!("{:?}", nal_unit.rbsp);
-                        }
-                        _ => {}
                     }
-                }
+                    _ => {}
+                },
             }
         }
     }

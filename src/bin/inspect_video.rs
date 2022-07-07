@@ -4,7 +4,7 @@ use structopt::StructOpt;
 use std::path::PathBuf;
 use std::io::Read;
 use bitstream_io::{BitReader, BigEndian};
-use h264_glitcher::h264::{NalIterator, NalUnit, NALUnitType, SliceHeader, Sps};
+use h264_glitcher::h264::{NalIterator, NalUnit, NALUnitType, SliceHeader, Sps, Pps};
 
 
 #[derive(Debug, StructOpt)]
@@ -40,6 +40,14 @@ fn main() -> std::io::Result<()> {
                         let sps = Sps::read(&mut BitReader::endian(nal_unit.rbsp.as_slice(), BigEndian));
                         println!("{:?}", nal_unit.rbsp);
                         match sps {
+                            Err(e) => println!("Failed to parse SPS: {:?}", e),
+                            Ok(sps) => println!("{:?}", sps)
+                        }
+                    }
+                    NALUnitType::Pps => {
+                        let pps = Pps::read(&mut BitReader::endian(nal_unit.rbsp.as_slice(), BigEndian));
+                        println!("{:?}", nal_unit.rbsp);
+                        match pps {
                             Err(e) => println!("Failed to parse SPS: {:?}", e),
                             Ok(sps) => println!("{:?}", sps)
                         }

@@ -1,6 +1,8 @@
-use crate::h264::{ParseError, read_ue, write_ue, read_optional, write_optional, read_rbsp_trailing_bits, write_rbsp_trailing_bits};
-use std::convert::TryInto;
-use bitstream_io::{BitWrite, BitRead};
+use crate::h264::{
+    read_optional, read_optional_unimplemented, read_rbsp_trailing_bits, read_ue, write_optional,
+    write_rbsp_trailing_bits, write_ue, ParseError,
+};
+use bitstream_io::{BitRead, BitWrite};
 use visit_diff::Diff;
 
 #[derive(Clone, Debug, Diff, PartialEq)]
@@ -12,40 +14,39 @@ pub enum PicOrderCntType {
 
 #[derive(Clone, Debug, Diff, PartialEq)]
 pub struct Sps {
-    pub profile_idc : u8,
-    pub constraint_set0_flag : bool,
-    pub constraint_set1_flag : bool,
-    pub constraint_set2_flag : bool,
-    pub constraint_set3_flag : bool,
-    pub constraint_set4_flag : bool,
-    pub constraint_set5_flag : bool,
-    pub level_idc : u8,
-    pub seq_parameter_set_id : u8, //can be 0 to 31
-    pub chroma_format_idc: u8, // 0 to 4, default is 1
+    pub profile_idc: u8,
+    pub constraint_set0_flag: bool,
+    pub constraint_set1_flag: bool,
+    pub constraint_set2_flag: bool,
+    pub constraint_set3_flag: bool,
+    pub constraint_set4_flag: bool,
+    pub constraint_set5_flag: bool,
+    pub level_idc: u8,
+    pub seq_parameter_set_id: u8, //can be 0 to 31
+    pub chroma_format_idc: u8,    // 0 to 4, default is 1
     pub separate_colour_plane_flag: bool,
-    pub bit_depth_luma_minus8: u8, // 0 to 6, default is 0
+    pub bit_depth_luma_minus8: u8,   // 0 to 6, default is 0
     pub bit_depth_chroma_minus8: u8, // 0 to 6, default is 0
     pub qpprime_y_zero_transform_bypass_flag: bool,
     //pub seq_scaling_matrix_present_flag: bool, //unimplemented
     //pub seq_scaling_list_present_flag: Vec<bool>,
-    pub log2_max_frame_num_minus4 : u8, // 0 to 12
-    pub pic_order_cnt_type : PicOrderCntType,
+    pub log2_max_frame_num_minus4: u8, // 0 to 12
+    pub pic_order_cnt_type: PicOrderCntType,
     //pub log2_max_pic_order_cnt_lsb_minus4 : u8, // 0 to 12
     //pub delta_pic_order_always_zero_flag: , //unimplemented
     //pub offset_for_non_ref_pic: ,
-    //pub offset_for_top_to_bottom_field:, 
+    //pub offset_for_top_to_bottom_field:,
     //pub offset_for_ref_frame: Vec<>,
-    pub max_num_ref_frames : u32, // 0 to MaxDpbFrames (as specified in clause A.3.1 or A.3.2)
-    pub gaps_in_frame_num_value_allowed_flag : bool,
-    pub pic_width_in_mbs_minus1 : u32,
-    pub pic_height_in_map_units_minus1 : u32,
-    pub frame_mbs_only_flag : bool,
-    pub mb_adaptive_frame_field_flag : bool,
-    pub direct_8x8_inference_flag : bool,
-    pub frame_crop_offset : Option<(u32, u32, u32, u32)>, // left, right, top, bottom
-    pub vui_parameters: Option<VuiParameters>, // Annex E
+    pub max_num_ref_frames: u32, // 0 to MaxDpbFrames (as specified in clause A.3.1 or A.3.2)
+    pub gaps_in_frame_num_value_allowed_flag: bool,
+    pub pic_width_in_mbs_minus1: u32,
+    pub pic_height_in_map_units_minus1: u32,
+    pub frame_mbs_only_flag: bool,
+    pub mb_adaptive_frame_field_flag: bool,
+    pub direct_8x8_inference_flag: bool,
+    pub frame_crop_offset: Option<(u32, u32, u32, u32)>, // left, right, top, bottom
+    pub vui_parameters: Option<VuiParameters>,           // Annex E
 }
-
 
 impl Sps {
     pub fn read(reader: &mut impl BitRead) -> Result<Self, ParseError> {
@@ -61,37 +62,34 @@ impl Sps {
         reader.read::<u8>(2)?;
 
         let level_idc = reader.read(8)?;
-        let seq_parameter_set_id = read_ue(reader)?.try_into().map_err(|_| ParseError::InvalidData)?;
+        let seq_parameter_set_id = read_ue(reader)?;
 
-
-        let mut chroma_format_idc : u8 = 1;
+        let mut chroma_format_idc: u8 = 1;
         let mut separate_colour_plane_flag = false;
-        let mut bit_depth_luma_minus8 : u8 = 0;
-        let mut bit_depth_chroma_minus8 : u8 = 0;
+        let mut bit_depth_luma_minus8: u8 = 0;
+        let mut bit_depth_chroma_minus8: u8 = 0;
         let mut qpprime_y_zero_transform_bypass_flag = false;
 
         match profile_idc {
-            100|110|122|244|44|83|86|118|128|138|139|134|135 => {
-                chroma_format_idc = read_ue(reader)?.try_into().map_err(|_| ParseError::InvalidData)?;
+            100 | 110 | 122 | 244 | 44 | 83 | 86 | 118 | 128 | 138 | 139 | 134 | 135 => {
+                chroma_format_idc = read_ue(reader)?;
                 if chroma_format_idc == 3 {
                     separate_colour_plane_flag = reader.read_bit()?;
                 }
-                bit_depth_luma_minus8 = read_ue(reader)?.try_into().map_err(|_| ParseError::InvalidData)?;
-                bit_depth_chroma_minus8 = read_ue(reader)?.try_into().map_err(|_| ParseError::InvalidData)?;
+                bit_depth_luma_minus8 = read_ue(reader)?;
+                bit_depth_chroma_minus8 = read_ue(reader)?;
                 qpprime_y_zero_transform_bypass_flag = reader.read_bit()?;
 
                 // seq_scaling_matrix_present_flag
-                if reader.read_bit()? {
-                    return Err(ParseError::Unimplemented);
-                }
+                read_optional_unimplemented(reader)?;
             }
-            _ => {},
+            _ => {}
         }
 
-        let log2_max_frame_num_minus4 : u8 = read_ue(reader)?.try_into().map_err(|_| ParseError::InvalidData)?;
+        let log2_max_frame_num_minus4: u8 = read_ue(reader)?;
         let pic_order_cnt_type = read_ue(reader)?;
         let pic_order_cnt_type = match pic_order_cnt_type {
-            0 => PicOrderCntType::Type0(read_ue(reader)?.try_into().map_err(|_| ParseError::InvalidData)?),
+            0 => PicOrderCntType::Type0(read_ue(reader)?),
             1 => return Err(ParseError::Unimplemented),
             2 => PicOrderCntType::Type2,
             _ => return Err(ParseError::InvalidData),
@@ -163,7 +161,7 @@ impl Sps {
         write_ue(writer, self.seq_parameter_set_id.into())?;
 
         match self.profile_idc {
-            100|110|122|244|44|83|86|118|128|138|139|134|135 => {
+            100 | 110 | 122 | 244 | 44 | 83 | 86 | 118 | 128 | 138 | 139 | 134 | 135 => {
                 write_ue(writer, self.chroma_format_idc.into())?;
                 if self.chroma_format_idc == 3 {
                     writer.write_bit(self.separate_colour_plane_flag)?;
@@ -175,14 +173,17 @@ impl Sps {
                 // seq_scaling_matrix_present_flag
                 writer.write_bit(false)?;
             }
-            _ => {},
+            _ => {}
         }
 
         write_ue(writer, self.log2_max_frame_num_minus4.into())?;
-        write_ue(writer, match self.pic_order_cnt_type {
-            PicOrderCntType::Type0(_) => 0,
-            PicOrderCntType::Type2 => 2,
-        })?;
+        write_ue(
+            writer,
+            match self.pic_order_cnt_type {
+                PicOrderCntType::Type0(_) => 0,
+                PicOrderCntType::Type2 => 2,
+            },
+        )?;
         if let PicOrderCntType::Type0(log2_max_pic_order_cnt_lsb_minus4) = self.pic_order_cnt_type {
             write_ue(writer, log2_max_pic_order_cnt_lsb_minus4.into())?;
         }
@@ -226,7 +227,7 @@ impl VideoSignalType {
         let video_full_range_flag = reader.read_bit()?;
         let colour_description = read_optional(reader, |r| ColourDescription::read(r))?;
 
-        Ok(Self{
+        Ok(Self {
             video_format,
             video_full_range_flag,
             colour_description,
@@ -253,7 +254,7 @@ impl ColourDescription {
         let transfer_characteristics = reader.read(8)?;
         let matrix_coefficients = reader.read(8)?;
 
-        Ok(Self{
+        Ok(Self {
             colour_primaries,
             transfer_characteristics,
             matrix_coefficients,
@@ -278,7 +279,7 @@ impl ChromaLocInfo {
         let chroma_sample_loc_type_top_field = read_ue(reader)?;
         let chroma_sample_loc_type_bottom_field = read_ue(reader)?;
 
-        Ok(Self{
+        Ok(Self {
             chroma_sample_loc_type_top_field,
             chroma_sample_loc_type_bottom_field,
         })
@@ -303,7 +304,7 @@ impl TimingInfo {
         let time_scale = reader.read(32)?;
         let fixed_frame_rate_flag = reader.read_bit()?;
 
-        Ok(Self{
+        Ok(Self {
             num_units_in_tick,
             time_scale,
             fixed_frame_rate_flag,
@@ -338,7 +339,7 @@ impl BitstreamRestriction {
         let max_num_reorder_frames = read_ue(reader)?;
         let max_dec_frame_buffering = read_ue(reader)?;
 
-        Ok(Self{
+        Ok(Self {
             motion_vectors_over_pic_boundaries_flag,
             max_bytes_per_pic_denom,
             max_bits_per_mb_denom,
@@ -362,8 +363,8 @@ impl BitstreamRestriction {
 
 #[derive(Clone, Debug, Diff, PartialEq)]
 pub struct VuiParameters {
-    pub aspect_ratio_idc : Option<u8>,
-    pub overscan_appropriate_flag : Option<bool>,
+    pub aspect_ratio_idc: Option<u8>,
+    pub overscan_appropriate_flag: Option<bool>,
     pub video_signal_type: Option<VideoSignalType>,
     pub chroma_loc_info: Option<ChromaLocInfo>,
     pub timing_info: Option<TimingInfo>,
@@ -388,14 +389,10 @@ impl VuiParameters {
 
         //TODO
         //nal_hrd_parameters_present_flag
-        if reader.read_bit()? {
-            return Err(ParseError::Unimplemented);
-        }
-        
+        read_optional_unimplemented(reader)?;
+
         //vcl_hrd_parameters_present_flag
-        if reader.read_bit()? {
-            return Err(ParseError::Unimplemented);
-        }
+        read_optional_unimplemented(reader)?;
 
         //if( nal_hrd_parameters_present_flag || vcl_hrd_parameters_present_flag ) low_delay_hrd_flag
 
@@ -409,7 +406,7 @@ impl VuiParameters {
             chroma_loc_info,
             timing_info,
             pic_struct_present_flag,
-            bitstream_restriction
+            bitstream_restriction,
         })
     }
     pub fn write(&self, writer: &mut impl BitWrite) -> std::io::Result<()> {
@@ -420,7 +417,9 @@ impl VuiParameters {
             w.write(8, *aspect)
         })?;
 
-        write_optional(writer, &self.overscan_appropriate_flag, |w, v| w.write_bit(*v))?;
+        write_optional(writer, &self.overscan_appropriate_flag, |w, v| {
+            w.write_bit(*v)
+        })?;
 
         write_optional(writer, &self.video_signal_type, |w, v| v.write(w))?;
         write_optional(writer, &self.chroma_loc_info, |w, v| v.write(w))?;
@@ -443,19 +442,20 @@ impl VuiParameters {
     }
 }
 
-
-
 #[cfg(test)]
 mod test {
     use super::*;
-    use bitstream_io::{BitReader, BitWriter, BigEndian};
+    use bitstream_io::{BigEndian, BitReader, BitWriter};
 
     #[test]
     fn test_sps_reencode() {
-        let rbsp : &[u8] = &[100, 0, 40, 172, 180, 3, 192, 17, 63, 44, 32, 0, 0, 0, 32, 0, 0, 6, 1, 227, 6, 84];
+        let rbsp: &[u8] = &[
+            100, 0, 40, 172, 180, 3, 192, 17, 63, 44, 32, 0, 0, 0, 32, 0, 0, 6, 1, 227, 6, 84,
+        ];
         let sps = Sps::read(&mut BitReader::endian(rbsp, BigEndian)).unwrap();
         let mut rbsp_reencode = Vec::new();
-        sps.write(&mut BitWriter::endian(&mut rbsp_reencode, BigEndian)).unwrap();
+        sps.write(&mut BitWriter::endian(&mut rbsp_reencode, BigEndian))
+            .unwrap();
         assert_eq!(rbsp, rbsp_reencode);
     }
 }
