@@ -25,26 +25,18 @@ fn take_until_nal_start<I : Iterator<Item=u8>>(it: &mut I) -> Option<Vec<u8>> {
     let mut nal_data = Vec::<u8>::new();
 
     // Find nal end (start of next nal) (0x000001 or 0x00000001)
-    // Put to puffer while searching
+    // Put to buffer while searching
     let mut zeros_found : i32 = 0;
     loop {
         let next = it.next()?;
         if next == 0x00 {
             zeros_found += 1;
-        } else if next == 0x01 {
-            if zeros_found >= 2 {
-                for _ in 0..(zeros_found-3) {
-                    nal_data.push(0x00);
-                }
-                //found NAL start
-                return Some(nal_data);
-            } else {
-                for _ in 0..zeros_found {
-                    nal_data.push(0x00);
-                }
-                nal_data.push(next);
-                zeros_found = 0;
+        } else if next == 0x01 && zeros_found >= 2 {
+            for _ in 0..(zeros_found-3) {
+                nal_data.push(0x00);
             }
+            //found NAL start
+            return Some(nal_data);
         } else {
             for _ in 0..zeros_found {
                 nal_data.push(0x00);
