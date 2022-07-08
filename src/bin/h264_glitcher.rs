@@ -1,5 +1,6 @@
 use h264_glitcher::h264::*;
 use h264_glitcher::beat_predictor::BeatPredictor;
+use h264_glitcher::fps_loop::{LoopTimer, LoopController};
 
 extern crate structopt;
 
@@ -41,7 +42,6 @@ struct Opt {
 
 #[derive(Clone)]
 struct StreamingParams {
-    fps: f32,
     record_loop: bool,
     play_loop: bool,
     loop_ping_pong: bool,
@@ -65,7 +65,6 @@ struct StreamingParams {
 impl Default for StreamingParams {
     fn default() -> Self {
         Self {
-            fps: 30.0,
             record_loop: false,
             play_loop: false,
             loop_ping_pong: false,
@@ -98,6 +97,7 @@ fn main() -> std::io::Result<()> {
     }
 
     let streaming_params = Arc::new(Mutex::new(StreamingParams::default()));
+    let (mut loop_timer, loop_controller) = LoopTimer::new();
 
     // Run OSC listener
     let addr = match SocketAddr::from_str(&opt.listen_addr) {
@@ -115,9 +115,10 @@ fn main() -> std::io::Result<()> {
     thread::spawn({
         let send_sock = Arc::clone(&send_sock);
         let streaming_params = streaming_params.clone();
+        let loop_controller = loop_controller.clone();
         let paths = paths.clone();
         move || {
-        video_name_sender(send_sock, streaming_params, paths);
+        video_name_sender(send_sock, streaming_params, loop_controller, paths);
     }});
 
     let stdout = std::io::stdout();
@@ -187,32 +188,6 @@ fn main() -> std::io::Result<()> {
     let mut loop_backwards = false;
     let mut recording = false; // for params.record_loop edge detection
 
-    let (sender, receiver) = std::sync::mpsc::sync_channel(0);
-
-    std::thread::spawn({
-        let streaming_params = Arc::clone(&streaming_params);
-        let sender = sender.clone();
-        move || {
-
-        let max_supported_fps = 240.0;
-
-        let mut last_frame_at = Instant::now();
-        loop {
-            let target_fps = streaming_params.lock().unwrap().fps;
-            let now = Instant::now();
-            if last_frame_at.add(Duration::from_secs_f32(1.0 / target_fps)) >  now {
-                // Sleep very briefly, then re-evaluate.
-                // This lowers response time to fps / video_num changes.
-                // XXX: interruptible sleep would be better
-                spin_sleep::sleep(Duration::from_secs_f32( 1.0 / max_supported_fps));
-                continue;
-            }
-            last_frame_at = now;
-            // wake the main loop for one frame
-            sender.send(()).unwrap();
-        }
-    }});
-
     let beat_predictor = BeatPredictor::new();
     let beat_predictor = Arc::new(Mutex::new(beat_predictor));
     let switch_history: VecDeque<usize> = VecDeque::with_capacity(5);
@@ -220,25 +195,26 @@ fn main() -> std::io::Result<()> {
     thread::spawn({
         let send_sock = Arc::clone(&send_sock);
         let streaming_params = streaming_params.clone();
-        let sender = sender.clone();
+        let fps_controller = loop_controller.clone();
         let beat_predictor = beat_predictor.clone();
         let switch_history = switch_history.clone();
         move || {
-        beat_thread(beat_predictor, switch_history, send_sock, &addr, streaming_params, sender);
+        beat_thread(beat_predictor, switch_history, send_sock, &addr, streaming_params, fps_controller);
     }});
 
     thread::spawn({
         let send_sock = Arc::clone(&send_sock);
         let streaming_params = streaming_params.clone();
-        let sender = sender.clone();
+        let fps_controller = loop_controller.clone();
         let beat_predictor = beat_predictor.clone();
         let switch_history = switch_history.clone();
         let external_beat_divider = opt.external_beat_divider;
         move || {
-        osc_listener(beat_predictor, external_beat_divider, switch_history, send_sock, &addr, streaming_params, sender);
+        osc_listener(beat_predictor, external_beat_divider, switch_history, send_sock, &addr, streaming_params, fps_controller);
     }});
 
     loop {
+        loop_timer.begin_loop();
         let mut params = streaming_params.lock().unwrap().clone();
 
         // Process all "requests"
@@ -367,14 +343,13 @@ fn main() -> std::io::Result<()> {
                 continue; //If we didn't send out frame don't sleep
             }
         }
-
-        receiver.recv().unwrap();
+        loop_timer.end_loop();
     }
 }
 
 const PALETTE : &'static [&'static str] = &["EF476FFF", "FFD166FF", "06D6A0FF", "118AB2FF", "aa1d97ff"];
 
-fn video_name_sender(send_sock: Arc<Mutex<UdpSocket>>, streaming_params: Arc<Mutex<StreamingParams>>, paths: Vec<PathBuf>) {
+fn video_name_sender(send_sock: Arc<Mutex<UdpSocket>>, streaming_params: Arc<Mutex<StreamingParams>>, loop_controller: LoopController, paths: Vec<PathBuf>) {
 
     loop {
         let params = streaming_params.lock().unwrap().clone();
@@ -382,7 +357,7 @@ fn video_name_sender(send_sock: Arc<Mutex<UdpSocket>>, streaming_params: Arc<Mut
             // Send FPS
             let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
                 addr: "/fps".to_string(),
-                args: vec![params.fps.into()],
+                args: vec![loop_controller.fps().into()],
             })).unwrap();
             send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
             // Send auto-states
@@ -437,15 +412,7 @@ fn video_name_sender(send_sock: Arc<Mutex<UdpSocket>>, streaming_params: Arc<Mut
 
 }
 
-fn beat_thread(beat_predictor: Arc<Mutex<BeatPredictor>>, switch_history: Arc<Mutex<VecDeque<usize>>>, send_sock: Arc<Mutex<UdpSocket>>, addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>, wakeup_main_loop: SyncSender<()>) {
-    let wake_main_loop = move || {
-        match wakeup_main_loop.try_send(()) {
-            Ok(_) => (),
-            Err(TrySendError::Full(_)) => (),
-            e @ Err(_) => panic!("{:?}", e),
-        }
-    };
-
+fn beat_thread(beat_predictor: Arc<Mutex<BeatPredictor>>, switch_history: Arc<Mutex<VecDeque<usize>>>, send_sock: Arc<Mutex<UdpSocket>>, addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>, mut fps_controller: LoopController) {
     let mut auto_switch_num = 0;
     let mut beat_num = 0;
 
@@ -478,7 +445,7 @@ fn beat_thread(beat_predictor: Arc<Mutex<BeatPredictor>>, switch_history: Arc<Mu
                     let mut params = streaming_params.lock().unwrap();
                     if params.auto_skip {
                         params.skip_frames = Some(20);
-                        wake_main_loop();
+                        fps_controller.wake_up_now();
                     }
 
                     if params.auto_switch_n > 0 {
@@ -489,7 +456,7 @@ fn beat_thread(beat_predictor: Arc<Mutex<BeatPredictor>>, switch_history: Arc<Mu
                         }
                         if switch_history.len() > 0 {
                             params.video_num = switch_history[auto_switch_num];
-                            wake_main_loop();
+                            fps_controller.wake_up_now();
                         }
                     }
 
@@ -505,17 +472,10 @@ fn beat_thread(beat_predictor: Arc<Mutex<BeatPredictor>>, switch_history: Arc<Mu
     }
 }
 
-fn osc_listener(beat_predictor: Arc<Mutex<BeatPredictor>>, external_beat_divider: u32, switch_history: Arc<Mutex<VecDeque<usize>>>, send_sock: Arc<Mutex<UdpSocket>>, addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>, wakeup_main_loop: SyncSender<()>) {
+fn osc_listener(beat_predictor: Arc<Mutex<BeatPredictor>>, external_beat_divider: u32, switch_history: Arc<Mutex<VecDeque<usize>>>, send_sock: Arc<Mutex<UdpSocket>>, addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>, mut fps_controller: LoopController) {
     let sock = UdpSocket::bind(addr).unwrap();
     eprintln!("OSC: Listening to {}", addr);
 
-    let wake_main_loop = move || {
-        match wakeup_main_loop.try_send(()) {
-            Ok(_) => (),
-            Err(TrySendError::Full(_)) => (),
-            e @ Err(_) => panic!("{:?}", e),
-        }
-    };
     let mut buf = [0u8; rosc::decoder::MTU];
 
     let mut beat_i = 0;
@@ -527,8 +487,7 @@ fn osc_listener(beat_predictor: Arc<Mutex<BeatPredictor>>, external_beat_divider
                 eprintln!("updated client_addr: {:?}", params.client_addr);
             },
             "/fps" => {
-                params.fps = msg.args[0].clone().float().ok_or(())?;
-                wake_main_loop();
+                fps_controller.set_fps(msg.args[0].clone().float().ok_or(())?);
             },
             "/record_loop" => {
                 params.record_loop = msg.args[0].clone().bool().ok_or(())?;
@@ -550,11 +509,11 @@ fn osc_listener(beat_predictor: Arc<Mutex<BeatPredictor>>, external_beat_divider
             },
             "/skip_frames" => {
                 params.skip_frames = Some(msg.args[0].clone().int().ok_or(())? as usize);
-                wake_main_loop();
+                fps_controller.wake_up_now();
             },
             "/video_num" => {
                 params.video_num = msg.args[0].clone().int().ok_or(())? as usize;
-                wake_main_loop();
+                fps_controller.wake_up_now();
                 if switch_history.len() == 5 {
                     switch_history.pop_back();
                 }
