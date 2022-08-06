@@ -159,10 +159,7 @@ fn main() -> std::io::Result<()> {
         let input_file = File::open(path)?;
         let file = std::io::BufReader::with_capacity(1<<20, input_file);
         let it = NalIterator::new(file.bytes().map(|x| x.unwrap()));
-        let it = it.map(move |data| {
-            let nal_unit = NalUnit::from_bytes(&data);
-            (data, nal_unit)
-        });
+        let it = it.map(|data| NalUnit::from_bytes(&data));
         Ok(it)
     };
 
@@ -171,7 +168,7 @@ fn main() -> std::io::Result<()> {
 
     // Write out at least one I-frame
     loop {
-        let (data, nal_unit) = h264_iter.next().unwrap();
+        let nal_unit = h264_iter.next().unwrap();
         if let Ok(nal_unit) = nal_unit {
             write_frame(&nal_unit)?;
             if nal_unit.nal_unit_type == NALUnitType::CodedSliceIdr {
@@ -320,16 +317,13 @@ fn main() -> std::io::Result<()> {
                 h264_iter = open_h264_file(&paths[current_video_num])?;
                 frame = h264_iter.next();
             }
-            let (data, nal_unit) = frame.unwrap();
-            if let Ok(mut nal_unit) = nal_unit {
+            let nal_unit = frame.unwrap();
+            if let Ok(nal_unit) = nal_unit {
                 // If pass_iframe is not activated, send only CodedSliceNonIdr
                 // Sending a new SPS without an Idr Slice seems to cause problems when switching between some videos
                 if nal_unit.nal_unit_type == NALUnitType::CodedSliceNonIdr || params.pass_iframe {
                     write_frame(&nal_unit)?;
-                    let is_picture_data = match nal_unit.nal_unit_type {
-                        NALUnitType::CodedSliceIdr | NALUnitType::CodedSliceNonIdr => { true },
-                        _ => { false },
-                    };
+                    let is_picture_data = nal_unit.nal_unit_type.is_picture_data();
                     if params.record_loop {
                         loop_buf.push(nal_unit);
                     }

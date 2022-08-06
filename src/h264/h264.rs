@@ -26,3 +26,11 @@ enum_from_primitive! {
     }
 }
 
+impl NALUnitType {
+    pub fn is_picture_data(&self) -> bool {
+        match self {
+            NALUnitType::CodedSliceIdr | NALUnitType::CodedSliceNonIdr => { true },
+            _ => { false },
+        }
+    }
+}
