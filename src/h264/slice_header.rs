@@ -3,7 +3,7 @@ use crate::h264::ParseError;
 use crate::h264::read_ue;
 use std::io;
 use std::fmt;
-use io::{Write, Cursor, SeekFrom};
+use io::{Cursor, SeekFrom};
 use bitstream_io::{BigEndian, BitWriter, BitWrite, BitReader, BitRead};
 
 
@@ -39,7 +39,7 @@ impl SliceHeader {
 
         let separate_colour_plane_flag = false; //TODO actually get this from SPS
         if separate_colour_plane_flag {
-            let colour_plane_id = reader.read::<u8>(2)?;
+            let _colour_plane_id = reader.read::<u8>(2)?;
         }
 
         let frame_num_bits = 4; //TODO actually get this from SPS
