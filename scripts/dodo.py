@@ -1,6 +1,12 @@
 # This is a doit script (pydoit.org)
 # It re-encodes the mp4 videos in the directory `original` to raw h264 streams in the folder `encoded`
 # and generates video thumbnails in the folder `thumbnails`
+# copy it into your video folder and run using `doit`
+# the folder should have the structure:
+# videos
+# |_ original
+# |_ encoded     - will be created by the script
+# |_ thumbnails  - will be created by the script
 
 from pathlib import Path
 from doit.tools import config_changed
@@ -19,7 +25,7 @@ ffmpeg_config = {
 
 thumbnail_config = {
     'options': [
-        '-vf', 'scale=320:320:force_original_aspect_ratio=decrease',
+        '-vf', 'scale=320:180',
         '-vframes', '1'
     ]
 }

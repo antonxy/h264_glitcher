@@ -18,6 +18,9 @@ use std::thread;
 use std::sync::{Mutex, Arc};
 use std::net::{SocketAddr, UdpSocket};
 use rosc::{OscPacket, OscMessage, encoder, OscType};
+use websocket::sync::Server;
+use websocket::OwnedMessage;
+use walkdir::WalkDir;
 
 
 #[derive(Debug, StructOpt)]
@@ -25,7 +28,7 @@ use rosc::{OscPacket, OscMessage, encoder, OscType};
             long_about = "Pipe output into mpv.")]
 struct Opt {
     #[structopt(short, long, parse(from_os_str), required=true, help="Input video file(s). Directories will be ignored.")]
-    input: Vec<PathBuf>,
+    input_dir: PathBuf,
 
     #[structopt(short = "l", long, default_value = "0.0.0.0:8000", help="OSC listen address")]
     listen_addr: String,
@@ -40,6 +43,12 @@ struct Opt {
 }
 
 
+// TODO rename this as State
+// There should also be events
+// Design question: Should the state only be changed through events?
+// Or should it be possible to send a complete new state?
+// Sending complete new state would make implementation of state stack in ui easier
+// If there should be multiple clients, maybe sending only events causes smaller mess
 #[derive(Clone)]
 struct StreamingParams {
     record_loop: bool,
@@ -90,11 +99,34 @@ impl Default for StreamingParams {
 fn main() -> std::io::Result<()> {
     let opt = Opt::from_args();
 
-    let paths : Vec<PathBuf> = opt.input.into_iter().filter(|p| p.is_file()).collect();
-    // Check if all files can be opened
+    let encoded_path = opt.input_dir.join("encoded");
+    let thumbnail_path = opt.input_dir.join("thumbnails");
+    let relative_paths : Vec<PathBuf> = WalkDir::new(&encoded_path)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .map(|p| p.into_path())
+        .filter(|p| p.extension().unwrap_or(std::ffi::OsStr::new("")) == "h264")
+        .map(|p| p.strip_prefix(&encoded_path).unwrap().with_extension("").to_path_buf())
+        .collect();
+
+    let paths : Vec<PathBuf> = relative_paths.iter().map(|p| encoded_path.join(p).with_extension("h264")).collect();
+
+    // Check if all video files can be opened
     for path in &paths {
         File::open(path)?;
     }
+
+
+    let videos : Vec<h264_glitcher_protocol::Video> = relative_paths.iter().enumerate().map(|(i, p)| {
+        let mut file = File::open(thumbnail_path.join(p).with_extension("png")).unwrap();
+        let mut data = Vec::new();
+        file.read_to_end(&mut data).unwrap();
+        h264_glitcher_protocol::Video {
+            id: i,
+            name: p.to_str().unwrap().to_owned(),
+            thumbnail_png: data,
+        }
+    }).take(20).collect();
 
     let streaming_params = Arc::new(Mutex::new(StreamingParams::default()));
     let (mut loop_timer, loop_controller) = LoopTimer::new();
@@ -112,6 +144,66 @@ fn main() -> std::io::Result<()> {
     let send_sock = UdpSocket::bind(send_from_addr).unwrap();
     let send_sock = Arc::new(Mutex::new(send_sock));
 
+    // Start websocket server
+    // The server should send on connection:
+    // - video thumbnails
+    // - current state
+    // Whenever the state changes the new state should be sent
+    // The server should apply state changes sent to the websocket
+    // The server should accept events sent to the websocket
+    let websock_server = Server::bind("127.0.0.1:2794").unwrap();
+    thread::spawn({
+        let streaming_params = streaming_params.clone();
+        move || {
+            for request in websock_server.filter_map(Result::ok) {
+                // Spawn a new thread for each connection.
+                let videos = videos.clone();
+                let streaming_params = streaming_params.clone();
+                thread::spawn(move || {
+                    let mut client = request.use_protocol("rust-websocket").accept().unwrap();
+
+                    let ip = client.peer_addr().unwrap();
+
+                    eprintln!("Connection from {}", ip);
+
+                    let mut message = Vec::new();
+                    ciborium::ser::into_writer(&h264_glitcher_protocol::Message::Videos(videos), &mut message);
+                    client.send_message(&OwnedMessage::Binary(message)).unwrap();
+
+                    let (mut receiver, mut sender) = client.split().unwrap();
+
+                    for message in receiver.incoming_messages() {
+                        let message = message.unwrap();
+
+                        match message {
+                            OwnedMessage::Close(_) => {
+                                let message = OwnedMessage::Close(None);
+                                sender.send_message(&message).unwrap();
+                                eprintln!("Client {} disconnected", ip);
+                                return;
+                            }
+                            OwnedMessage::Ping(ping) => {
+                                let message = OwnedMessage::Pong(ping);
+                                sender.send_message(&message).unwrap();
+                            }
+                            OwnedMessage::Binary(data) => {
+                                let msg : h264_glitcher_protocol::Message = ciborium::de::from_reader(data.as_slice()).unwrap();
+                                match msg {
+                                    h264_glitcher_protocol::Message::Event(h264_glitcher_protocol::Event::SetVideo(video_id)) => {
+                                        eprintln!("Video num");
+                                        streaming_params.lock().unwrap().video_num = video_id;
+                                    },
+                                    _ => { eprintln!("Unhandled message"); },
+                                }
+                            }
+                            _ => eprintln!("Unhandled message"),
+                        }
+                    }
+                });
+            }
+        }
+    });
+
     thread::spawn({
         let send_sock = Arc::clone(&send_sock);
         let streaming_params = streaming_params.clone();
@@ -128,7 +220,7 @@ fn main() -> std::io::Result<()> {
 
 
     let mut last_frame_num = 0;
-    let rewrite_frame_nums = opt.rewrite_frame_nums;
+    let rewrite_frame_nums = true;
     let mut write_frame = move |nal_unit: &NalUnit| -> std::io::Result<()> {
         let mut nal_unit = nal_unit.clone();
         let has_frame_num = match nal_unit.nal_unit_type {

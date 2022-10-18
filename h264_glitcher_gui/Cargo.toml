@@ -1,0 +1,44 @@
+[package]
+name = "h264_glitcher_gui"
+default-run = "h264_glitcher_gui_bin"
+version = "0.1.0"
+authors = ["Anton Schirg <anton.schirg@posteo.de>"]
+edition = "2021"
+rust-version = "1.60"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[[bin]]
+name = "h264_glitcher_gui_bin"
+path = "src/main.rs"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+
+[dependencies]
+egui = "0.18.0"
+eframe = { version = "0.18.0", features = ["persistence"] }
+serde = { version = "1", features = ["derive"] } # You only need this if you want app persistence
+ehttp = "0.2"
+tracing = "0.1"
+egui_extras = { version = "*", features = ["image"] }
+image = { version = "0.24", features = ["png"] }
+poll-promise = "*"
+ewebsock = "*"
+h264_glitcher_protocol = { path = "../h264_glitcher_protocol" }
+ciborium = "0.2.0"
+
+# native:
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { version = "1.16", features = ["macros", "rt-multi-thread"] }
+tracing-subscriber = "0.3"
+
+# web:
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+console_error_panic_hook = "0.1.6"
+tracing-wasm = "0.2"
+
+
+[profile.release]
+opt-level = 2 # fast and small wasm
