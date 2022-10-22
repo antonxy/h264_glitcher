@@ -136,7 +136,7 @@ fn main() -> std::io::Result<()> {
             name: p.to_str().unwrap().to_owned(),
             thumbnail_png: data,
         }
-    }).take(20).collect();
+        }).collect();
 
     let streaming_params = Arc::new(Mutex::new(StreamingParams::default()));
     let (mut loop_timer, loop_controller) = LoopTimer::new();
@@ -176,10 +176,11 @@ fn main() -> std::io::Result<()> {
 
                     eprintln!("Connection from {}", ip);
 
-                    let mut message = Vec::new();
-                    ciborium::ser::into_writer(&h264_glitcher_protocol::Message::Videos(videos), &mut message);
-                    client.send_message(&OwnedMessage::Binary(message)).unwrap();
-
+                    for video in videos {
+                        let mut message = Vec::new();
+                        ciborium::ser::into_writer(&h264_glitcher_protocol::Message::Video(video), &mut message);
+                        client.send_message(&OwnedMessage::Binary(message)).unwrap();
+                    }
                     let (mut receiver, mut sender) = client.split().unwrap();
 
                     for message in receiver.incoming_messages() {
