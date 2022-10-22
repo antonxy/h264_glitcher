@@ -96,6 +96,16 @@ impl Default for StreamingParams {
     }
 }
 
+fn append_extension<S: AsRef<std::ffi::OsStr>>(path: &std::path::Path, extension: S) -> PathBuf {
+    let mut full_extension = std::ffi::OsString::new();
+    if let Some(ext) = path.extension() {
+        full_extension.push(ext);
+        full_extension.push(".");
+    }
+    full_extension.push(extension);
+    path.with_extension(full_extension)
+}
+
 fn main() -> std::io::Result<()> {
     let opt = Opt::from_args();
 
@@ -109,7 +119,7 @@ fn main() -> std::io::Result<()> {
         .map(|p| p.strip_prefix(&encoded_path).unwrap().with_extension("").to_path_buf())
         .collect();
 
-    let paths : Vec<PathBuf> = relative_paths.iter().map(|p| encoded_path.join(p).with_extension("h264")).collect();
+    let paths : Vec<PathBuf> = relative_paths.iter().map(|p| append_extension(&encoded_path.join(p), "h264")).collect();
 
     // Check if all video files can be opened
     for path in &paths {
@@ -118,7 +128,7 @@ fn main() -> std::io::Result<()> {
 
 
     let videos : Vec<h264_glitcher_protocol::Video> = relative_paths.iter().enumerate().map(|(i, p)| {
-        let mut file = File::open(thumbnail_path.join(p).with_extension("png")).unwrap();
+        let mut file = File::open(append_extension(&thumbnail_path.join(p), "png")).unwrap();
         let mut data = Vec::new();
         file.read_to_end(&mut data).unwrap();
         h264_glitcher_protocol::Video {
