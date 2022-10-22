@@ -21,7 +21,7 @@ pub struct TemplateApp {
     ws_receiver: Option<WsReceiver>,
 
     #[serde(skip)]
-    videos: Vec<Video>,
+    videos: Vec<Option<Video>>, //Videos are optional since they might not have been sent by the server yet
 }
 
 impl Default for TemplateApp {
@@ -67,14 +67,8 @@ impl TemplateApp {
                         let msg : h264_glitcher_protocol::Message = ciborium::de::from_reader(data.as_slice()).unwrap();
                         event!(Level::INFO, "Received message");
                         match msg {
-                            h264_glitcher_protocol::Message::Videos(videos) => {
-                                self.videos = videos.iter().map(|v| {
-                                    Video {
-                                        id: v.id,
-                                        name: v.name.clone(),
-                                        texture: RetainedImage::from_image_bytes(v.name.clone(), &v.thumbnail_png).unwrap(),
-                                    }
-                                }).collect();
+                            h264_glitcher_protocol::Message::Video(video) => {
+                                Self::handle_video_message(&mut self.videos, &video);
                             },
                             _ => event!(Level::INFO, "Received unhandled msg {:?}", msg),
                         }
@@ -84,6 +78,18 @@ impl TemplateApp {
             }
         }
     }
+
+    fn handle_video_message(videos: &mut Vec<Option<Video>>, video: &h264_glitcher_protocol::Video) {
+        while video.id + 1 > videos.len() {
+            videos.push(None);
+        }
+        videos[video.id] = Some(Video {
+            id: video.id,
+            name: video.name.clone(),
+            texture: RetainedImage::from_image_bytes(video.name.clone(), &video.thumbnail_png).unwrap(),
+        });
+    }
+
 }
 
 impl eframe::App for TemplateApp {
@@ -114,7 +120,7 @@ impl eframe::App for TemplateApp {
             self.handle_ws_events();
 
             ui.horizontal_wrapped(|ui| {
-                for video in &self.videos {
+                for video in self.videos.iter().filter_map(|v| v.as_ref()) {
                     let texture = &video.texture;
                     let img_size = 200.0 * texture.size_vec2() / texture.size_vec2().x;
                     if ui.add(egui::ImageButton::new(texture.texture_id(ctx), img_size)).clicked() {
