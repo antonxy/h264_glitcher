@@ -1,6 +1,6 @@
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub enum Message {
-    Videos(Vec<Video>),
+    Video(Video),
     State(State),
     Event(Event),
 }
