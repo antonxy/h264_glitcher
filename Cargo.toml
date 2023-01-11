@@ -26,3 +26,8 @@ spin_sleep = "1"
 bitstream-io = "1"
 visit_diff = "0.1"
 colored = "2"
+walkdir = "*"
+
+iron = "*"
+staticfile = "*"
+mount = "*"

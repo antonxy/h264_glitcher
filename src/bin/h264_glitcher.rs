@@ -18,14 +18,15 @@ use std::thread;
 use std::sync::{Mutex, Arc};
 use std::net::{SocketAddr, UdpSocket};
 use rosc::{OscPacket, OscMessage, encoder, OscType};
+use walkdir::WalkDir;
 
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "h264_glitcher", about = "Live controllable h264 glitcher.",
             long_about = "Pipe output into mpv.")]
 struct Opt {
-    #[structopt(short, long, parse(from_os_str), required=true, help="Input video file(s). Directories will be ignored.")]
-    input: Vec<PathBuf>,
+    #[structopt(short, long, parse(from_os_str), required=true, help="Input video directory. Expects a subdirectory \"encoded\" with the raw h264 streams and a subdirectory \"thumbnails\" with a thumbnail for each stream.")]
+    input_dir: PathBuf,
 
     #[structopt(short = "l", long, default_value = "0.0.0.0:8000", help="OSC listen address")]
     listen_addr: String,
@@ -87,14 +88,48 @@ impl Default for StreamingParams {
     }
 }
 
+
+fn append_extension<S: AsRef<std::ffi::OsStr>>(path: &std::path::Path, extension: S) -> PathBuf {
+    let mut full_extension = std::ffi::OsString::new();
+    if let Some(ext) = path.extension() {
+        full_extension.push(ext);
+        full_extension.push(".");
+    }
+    full_extension.push(extension);
+    path.with_extension(full_extension)
+}
+
 fn main() -> std::io::Result<()> {
     let opt = Opt::from_args();
 
-    let paths : Vec<PathBuf> = opt.input.into_iter().filter(|p| p.is_file()).collect();
-    // Check if all files can be opened
+    let encoded_path = opt.input_dir.join("encoded");
+    let thumbnail_path = opt.input_dir.join("thumbnails");
+    let relative_paths : Vec<PathBuf> = WalkDir::new(&encoded_path)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .map(|p| p.into_path())
+        .filter(|p| p.extension().unwrap_or(std::ffi::OsStr::new("")) == "h264")
+        .map(|p| p.strip_prefix(&encoded_path).unwrap().with_extension("").to_path_buf())
+        .collect();
+
+    let paths : Vec<PathBuf> = relative_paths.iter().map(|p| append_extension(&encoded_path.join(p), "h264")).collect();
+
+    // Check if all video files can be opened
     for path in &paths {
         File::open(path)?;
     }
+
+    let base_url = PathBuf::from("http://127.0.0.1:3000/");
+    let thumbnail_urls : Vec<String> = relative_paths.iter().map(|p| {
+         append_extension(&base_url.join(p), "png").to_str().unwrap().to_string()
+    }).collect();
+
+    thread::spawn(
+        move || {
+            h264_glitcher::thumbnail_server::serve(&thumbnail_path);
+        }
+    );
+
 
     let streaming_params = Arc::new(Mutex::new(StreamingParams::default()));
     let (mut loop_timer, loop_controller) = LoopTimer::new();
@@ -118,7 +153,7 @@ fn main() -> std::io::Result<()> {
         let loop_controller = loop_controller.clone();
         let paths = paths.clone();
         move || {
-        video_name_sender(send_sock, streaming_params, loop_controller, paths);
+        video_name_sender(send_sock, streaming_params, loop_controller, paths, thumbnail_urls);
     }});
 
     let stdout = std::io::stdout();
@@ -341,9 +376,9 @@ fn main() -> std::io::Result<()> {
     }
 }
 
-const PALETTE : &'static [&'static str] = &["EF476FFF", "FFD166FF", "06D6A0FF", "118AB2FF", "aa1d97ff"];
+const PALETTE : &'static [&'static str] = &["#EF476F", "#FFD166", "#06D6A0", "#118AB2", "#aa1d97"];
 
-fn video_name_sender(send_sock: Arc<Mutex<UdpSocket>>, streaming_params: Arc<Mutex<StreamingParams>>, loop_controller: LoopController, paths: Vec<PathBuf>) {
+fn video_name_sender(send_sock: Arc<Mutex<UdpSocket>>, streaming_params: Arc<Mutex<StreamingParams>>, loop_controller: LoopController, paths: Vec<PathBuf>, thumbnails: Vec<String>) {
 
     loop {
         let params = streaming_params.lock().unwrap().clone();
@@ -370,12 +405,12 @@ fn video_name_sender(send_sock: Arc<Mutex<UdpSocket>>, streaming_params: Arc<Mut
                 addr: "/beat_offset".to_string(),
                 args: vec![params.beat_offset.as_secs_f32().into()],
             })).unwrap();
+            send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
 
             // Send video labels
-            let mut i = 5;
             let mut last_dir = None;
             let mut color_idx = 0;
-            for path in &paths {
+            for (i, path) in paths.iter().enumerate() {
                 let dir = path.parent();
                 let filename = path.file_stem().unwrap().to_str().unwrap().to_string();
 
@@ -387,16 +422,22 @@ fn video_name_sender(send_sock: Arc<Mutex<UdpSocket>>, streaming_params: Arc<Mut
                 let color = PALETTE[color_idx];
 
                 let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
-                    addr: format!("/label{}", i).to_string(),
-                    args: vec![filename.into(), color.into()],
+                    addr: format!("/label_{}", i).to_string(),
+                    args: vec![filename.into()/*, color.into()*/],
                 })).unwrap();
                 send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
-                i += 1;
-            }
-            for j in i..54+(54-5)*2+1 {
+
                 let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
-                    addr: format!("/label{}", j).to_string(),
-                    args: vec!["N/A".into(), "#000000".into()],
+                    addr: format!("/label_{}/color", i).to_string(),
+                    args: vec![color.into()],
+                })).unwrap();
+                send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
+            }
+
+            for (j, thumbnail) in thumbnails.iter().enumerate() {
+                let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
+                    addr: format!("/thumbnail_{}", j).to_string(),
+                    args: vec![thumbnail.to_string().into()],
                 })).unwrap();
                 send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
             }
