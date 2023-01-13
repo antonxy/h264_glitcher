@@ -590,17 +590,17 @@
             "pips": false,
             "dashed": false,
             "gradient": [],
-            "snap": false,
+            "snap": true,
             "spring": false,
             "doubleTap": false,
             "range": {
               "min": 0,
-              "max": 0.5
+              "max": 3
             },
             "logScale": false,
             "sensitivity": 1,
-            "steps": "",
-            "origin": 0.5,
+            "steps": 4,
+            "origin": 0,
             "value": "",
             "default": "",
             "linkId": "",
