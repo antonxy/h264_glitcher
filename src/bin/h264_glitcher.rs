@@ -40,51 +40,102 @@ struct Opt {
     external_beat_divider: u32,
 }
 
+#[derive(Clone, Default)]
+struct State {
+    video_num: usize,
+    beat_multiplier: f32,
+    pass_iframe: bool,
+    playhead: f32,
+    loop_range: Option<(f32, f32)>,
+    auto_skip: bool,
+    drop_frames: bool,
+}
+
 
 #[derive(Clone)]
 struct StreamingParams {
     record_loop: bool,
-    play_loop: bool,
-    loop_ping_pong: bool,
+
     cut_loop: Option<f32>,
     restart_loop: bool,
-    pass_iframe: bool,
-    drop_frames: bool,
+
     skip_frames: Option<usize>,
-    video_num: usize,
     client_addr: Option<SocketAddr>,
-    save_loop_num: Option<usize>,
-    recall_loop_num: Option<usize>,
-    auto_skip: bool,
+    
     auto_switch_n: usize,
     loop_to_beat: bool,
     use_external_beat: bool,
     beat_offset: Duration,
     beat_divider: u32,
+
+    state_slots: Vec<State>,
+    active_slot: usize,
+    edit_slot: usize,
 }
 
 impl Default for StreamingParams {
     fn default() -> Self {
         Self {
             record_loop: false,
-            play_loop: false,
-            loop_ping_pong: false,
             cut_loop: None,
             restart_loop: false,
-            pass_iframe: false,
-            drop_frames: false,
             skip_frames: None,
-            video_num: 0,
             client_addr: None,
-            save_loop_num: None,
-            recall_loop_num: None,
-            auto_skip: false,
             auto_switch_n: 0,
             loop_to_beat: false,
             use_external_beat: false,
             beat_offset: Duration::from_millis(0),
             beat_divider: 1,
+
+            state_slots: vec![State::default(); 6],
+            active_slot: 0,
+            edit_slot: 0,
         }
+    }
+}
+
+impl StreamingParams {
+    fn active_state(&self) -> &State {
+        &self.state_slots[self.active_slot]
+    }
+
+    fn active_state_mut(&mut self) -> &mut State {
+        &mut self.state_slots[self.active_slot]
+    }
+
+    fn edit_state(&self) -> &State {
+        &self.state_slots[self.edit_slot]
+    }
+    
+    fn edit_state_mut(&mut self) -> &mut State {
+        &mut self.state_slots[self.edit_slot]
+    }
+}
+
+struct Video {
+    file: File,
+    loadedVideo : Option<Arc<Mutex<LoadedVideo>>>,
+}
+
+struct LoadedVideo {
+    frames: Vec<NalUnit>,
+}
+impl LoadedVideo {
+    fn load(path: &std::path::Path) -> std::io::Result<LoadedVideo> {
+        eprintln!("Open file {:?}", path);
+        let input_file = File::open(path)?;
+        let file = std::io::BufReader::with_capacity(1<<20, input_file);
+        let it = NalIterator::new(file.bytes().map(|x| x.unwrap()));
+        let it = it.map(|data| NalUnit::from_bytes(&data)).filter_map(|r| {
+            match r {
+                Ok(v) => Some(v),
+                Err(err) => {
+                    eprintln!("Failed to parse frame: {:?}", err);
+                    None
+                }
+            }
+        });
+        Ok(LoadedVideo { frames: it.collect() })
     }
 }
 
@@ -189,36 +240,58 @@ fn main() -> std::io::Result<()> {
         Ok(())
     };
 
-    let open_h264_file = |path| -> std::io::Result<_> {
-        eprintln!("Open file {:?}", path);
-        let input_file = File::open(path)?;
-        let file = std::io::BufReader::with_capacity(1<<20, input_file);
-        let it = NalIterator::new(file.bytes().map(|x| x.unwrap()));
-        let it = it.map(|data| NalUnit::from_bytes(&data));
-        Ok(it)
-    };
+    // let open_h264_file = |path| -> std::io::Result<_> {
+    //     eprintln!("Open file {:?}", path);
+    //     let input_file = File::open(path)?;
+    //     let file = std::io::BufReader::with_capacity(1<<20, input_file);
+    //     let it = NalIterator::new(file.bytes().map(|x| x.unwrap()));
+    //     let it = it.map(|data| NalUnit::from_bytes(&data));
+    //     Ok(it)
+    // };
 
-    let mut h264_iter = open_h264_file(&paths[0])?;
+
+
+    //let mut h264_iter = open_h264_file(&paths[0])?;
     let mut current_video_num = 0;
+    let mut current_video: LoadedVideo = LoadedVideo::load(&paths[0])?;
+    let mut current_frame: usize = 0;
+
+    let advance_frame = |current_frame: &mut usize, total_frames: usize| {
+        let (mut from_incl, mut to_excl) = (0, total_frames);
+
+        //TODO don't lock every fucking time
+        if let Some((loop_from, loop_to)) = streaming_params.lock().unwrap().active_state().loop_range {
+            let loop_from = (total_frames as f32 * loop_from) as usize;
+            let loop_to = (total_frames as f32 * loop_to) as usize;
+
+            from_incl = usize::min(loop_from, total_frames - 2);
+            to_excl = usize::min(usize::max(from_incl + 1, loop_to), total_frames);
+        }
+
+        assert!(from_incl >= 0);
+        assert!(from_incl < to_excl);
+        assert!(to_excl <= total_frames);
+
+        if *current_frame < from_incl {
+            *current_frame = from_incl;
+        } else {
+            *current_frame += 1;
+            if *current_frame >= to_excl {
+                *current_frame = from_incl;
+            }
+        }
+    };
 
     // Write out at least one I-frame
     loop {
-        let nal_unit = h264_iter.next().unwrap();
-        if let Ok(nal_unit) = nal_unit {
-            write_frame(&nal_unit)?;
-            if nal_unit.nal_unit_type == NALUnitType::CodedSliceIdr {
-                eprintln!("Got first I frame");
-                break;
-            }
+        let nal_unit = &current_video.frames[current_frame];
+        advance_frame(&mut current_frame, current_video.frames.len());
+        write_frame(&nal_unit)?;
+        if nal_unit.nal_unit_type == NALUnitType::CodedSliceIdr {
+            eprintln!("Got first I frame");
+            break;
         }
     }
-
-
-    let mut loop_mem = std::collections::HashMap::<usize, Vec<NalUnit>>::new();
-    let mut loop_buf = Vec::<NalUnit>::new();
-    let mut loop_i = 0;
-    let mut loop_backwards = false;
-    let mut recording = false; // for params.record_loop edge detection
 
     let beat_predictor = BeatPredictor::new();
     let beat_predictor = Arc::new(Mutex::new(beat_predictor));
@@ -248,130 +321,59 @@ fn main() -> std::io::Result<()> {
     loop {
         loop_timer.begin_loop();
         let mut params = streaming_params.lock().unwrap().clone();
+        let state = params.active_state().clone();
 
         // Process all "requests"
 
         // Switch video if requested
-        if current_video_num != params.video_num && params.video_num < paths.len() {
-            h264_iter = open_h264_file(&paths[params.video_num])?;
-            current_video_num = params.video_num;
-        }
-
-        if let Some(save_loop_num) = params.save_loop_num {
-            loop_mem.insert(save_loop_num, loop_buf.clone());
-            streaming_params.lock().unwrap().save_loop_num = None;
-        }
-
-        if let Some(recall_loop_num) = params.recall_loop_num {
-            loop_mem.get(&recall_loop_num).map(|x| loop_buf = x.clone());
-            let mut params_mut = streaming_params.lock().unwrap();
-            params_mut.recall_loop_num = None;
-            params_mut.play_loop = true;
-            if let Some(client_addr) = &params_mut.client_addr {
-                let msg_buf = encoder::encode(&OscPacket::Message(OscMessage{
-                    addr: "/play_loop".to_owned(),
-                    args: vec![params_mut.play_loop.into()],
-                })).unwrap();
-                send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
-            }
-        }
-
-        if let Some(cut_loop) = params.cut_loop {
-            let new_len = (loop_buf.len() as f32 * cut_loop) as usize + 1;
-            loop_buf.truncate(new_len);
-            streaming_params.lock().unwrap().cut_loop = None;
-        }
-
-        if params.restart_loop {
-            loop_i = 0;
-            streaming_params.lock().unwrap().restart_loop = false;
+        if current_video_num != state.video_num && state.video_num < paths.len() {
+            current_video_num = state.video_num;
+            current_video = LoadedVideo::load(&paths[state.video_num])?;
+            current_frame = 0;
         }
 
         // Now the state based stuff
 
-        if params.record_loop && !recording {
-            // clear loop buffer when starting a new recording
-            loop_buf.clear();
-            loop_i = 0;
-        } else if !params.record_loop && recording {
-            params.play_loop = true;
-            let mut params_mut = streaming_params.lock().unwrap();
-            params_mut.play_loop = true;
-            if let Some(client_addr) = &params_mut.client_addr {
-                let msg_buf = encoder::encode(&OscPacket::Message(OscMessage{
-                    addr: "/play_loop".to_owned(),
-                    args: vec![params_mut.play_loop.into()],
-                })).unwrap();
-                send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
-            }
+
+        
+        // Play from file
+        if state.drop_frames {
+            advance_frame(&mut current_frame, current_video.frames.len());
         }
-        recording = params.record_loop;
 
-        if params.play_loop && loop_buf.len() > 0 && !recording {
-            // Play from loop
-            if params.loop_ping_pong {
-                if loop_backwards {
-                    if loop_i > 0 {
-                        loop_i -= 1;
-                    }
-                    if loop_i == 0 {
-                        loop_backwards = false;
-                    }
-                } else {
-                    loop_i += 1;
-                    if loop_i >= loop_buf.len() - 1 {
-                        loop_backwards = true;
-                        loop_i = loop_buf.len() - 1;
-                    }
-                }
-            } else {
-                loop_i += 1;
-                if loop_i >= loop_buf.len() {
-                    loop_i = 0;
-                }
+        if let Some(skip) = params.skip_frames {
+            for _ in 0..skip {
+                advance_frame(&mut current_frame, current_video.frames.len()); //TODO advance n
             }
+            streaming_params.lock().unwrap().skip_frames = None;
+        }
 
-            write_frame(&loop_buf[loop_i])?;
-
+        // Restart video if at end
+        advance_frame(&mut current_frame, current_video.frames.len());
+        let mut nal_unit = &current_video.frames[current_frame];
+        
+        // If pass_iframe is not activated, send only CodedSliceNonIdr
+        // Sending a new SPS without an Idr Slice seems to cause problems when switching between some videos
+        if nal_unit.nal_unit_type == NALUnitType::CodedSliceNonIdr || state.pass_iframe {
+            write_frame(&nal_unit)?;
+            let is_picture_data = nal_unit.nal_unit_type.is_picture_data();
+            if !is_picture_data {
+                continue; //Only sleep if the nal_unit is a video frame
+            }
         } else {
-            // Play from file
-            if params.drop_frames {
-                h264_iter.next();
-            }
-
-            if let Some(skip) = params.skip_frames {
-                for _ in 0..skip {
-                    h264_iter.next();
-                }
-                streaming_params.lock().unwrap().skip_frames = None;
-            }
-
-            let mut frame = h264_iter.next();
-            // Restart video if at end
-            if frame.is_none() {
-                h264_iter = open_h264_file(&paths[current_video_num])?;
-                frame = h264_iter.next();
-            }
-            let nal_unit = frame.unwrap();
-            if let Ok(nal_unit) = nal_unit {
-                // If pass_iframe is not activated, send only CodedSliceNonIdr
-                // Sending a new SPS without an Idr Slice seems to cause problems when switching between some videos
-                if nal_unit.nal_unit_type == NALUnitType::CodedSliceNonIdr || params.pass_iframe {
-                    write_frame(&nal_unit)?;
-                    let is_picture_data = nal_unit.nal_unit_type.is_picture_data();
-                    if params.record_loop {
-                        loop_buf.push(nal_unit);
-                    }
-                    if !is_picture_data {
-                        continue; //Only sleep if the nal_unit is a video frame
-                    }
-                } else {
-                    continue; //If we didn't send out frame don't sleep
-                }
-            } else {
-                continue; //If we didn't send out frame don't sleep
-            }
+            continue; //If we didn't send out frame don't sleep
         }
+
+        let playhead = current_frame as f32 / current_video.frames.len() as f32;
+        streaming_params.lock().unwrap().active_state_mut().playhead = playhead;
+        if let Some(client_addr) = params.client_addr {
+            let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
+                addr: "/playhead".to_string(),
+                args: vec![playhead.into()],
+            })).unwrap();
+            send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
+        }
+
         loop_timer.end_loop();
     }
 }
@@ -392,7 +394,7 @@ fn video_name_sender(send_sock: Arc<Mutex<UdpSocket>>, streaming_params: Arc<Mut
             // Send auto-states
             let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
                 addr: "/auto_skip".to_string(),
-                args: vec![params.auto_skip.into()],
+                args: vec![params.edit_state().auto_skip.into()],
             })).unwrap();
             send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
             let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
@@ -478,7 +480,7 @@ fn beat_thread(beat_predictor: Arc<Mutex<BeatPredictor>>, switch_history: Arc<Mu
 
                     // Do the beat stuff here
                     let mut params = streaming_params.lock().unwrap();
-                    if params.auto_skip {
+                    if params.active_state().auto_skip {
                         params.skip_frames = Some(20);
                         fps_controller.wake_up_now();
                     }
@@ -490,7 +492,7 @@ fn beat_thread(beat_predictor: Arc<Mutex<BeatPredictor>>, switch_history: Arc<Mu
                             auto_switch_num = 0;
                         }
                         if switch_history.len() > 0 {
-                            params.video_num = switch_history[auto_switch_num];
+                            params.active_state_mut().video_num = switch_history[auto_switch_num];
                             fps_controller.wake_up_now();
                         }
                     }
@@ -525,43 +527,41 @@ fn osc_listener(beat_predictor: Arc<Mutex<BeatPredictor>>, external_beat_divider
                 fps_controller.set_fps(msg.args[0].clone().float().ok_or(())?);
             },
             "/record_loop" => {
-                params.record_loop = msg.args[0].clone().bool().ok_or(())?;
+                let record_loop = msg.args[0].clone().bool().ok_or(())?;
+                if record_loop {
+                    let (_, to) = params.active_state().loop_range.unwrap_or((0.0, 1.0));
+                    params.active_state_mut().loop_range = Some((params.active_state().playhead, to));
+                } else {
+                    let (from, _) = params.active_state().loop_range.unwrap_or((0.0, 1.0));
+                    params.active_state_mut().loop_range = Some((from, params.active_state().playhead));
+                }
             },
             "/play_loop" => {
-                params.play_loop = msg.args[0].clone().bool().ok_or(())?;
-            },
-            "/loop_ping_pong" => {
-                params.loop_ping_pong = msg.args[0].clone().bool().ok_or(())?;
+                //params.play_loop = msg.args[0].clone().bool().ok_or(())?;
             },
             "/cut_loop" => {
                 params.cut_loop = Some(msg.args[0].clone().float().ok_or(())?);
             },
             "/pass_iframe" => {
-                params.pass_iframe = msg.args[0].clone().bool().ok_or(())?;
+                params.edit_state_mut().pass_iframe = msg.args[0].clone().bool().ok_or(())?;
             },
             "/drop_frames" => {
-                params.drop_frames = msg.args[0].clone().bool().ok_or(())?;
+                params.edit_state_mut().drop_frames = msg.args[0].clone().bool().ok_or(())?;
             },
             "/skip_frames" => {
                 params.skip_frames = Some(msg.args[0].clone().int().ok_or(())? as usize);
                 fps_controller.wake_up_now();
             },
             "/video_num" => {
-                params.video_num = msg.args[0].clone().int().ok_or(())? as usize;
+                params.edit_state_mut().video_num = msg.args[0].clone().int().ok_or(())? as usize;
                 fps_controller.wake_up_now();
                 if switch_history.len() == 5 {
                     switch_history.pop_back();
                 }
-                switch_history.push_front(params.video_num);
-            },
-            "/save_loop" => {
-                params.save_loop_num = Some(msg.args[0].clone().int().ok_or(())? as usize);
-            },
-            "/recall_loop" => {
-                params.recall_loop_num = Some(msg.args[0].clone().int().ok_or(())? as usize);
+                switch_history.push_front(params.edit_state().video_num);
             },
             "/auto_skip" => {
-                params.auto_skip = msg.args[0].clone().bool().ok_or(())?;
+                params.edit_state_mut().auto_skip = msg.args[0].clone().bool().ok_or(())?;
             },
             "/auto_switch" => {
                 params.auto_switch_n = msg.args[0].clone().int().ok_or(())? as usize;
@@ -609,6 +609,17 @@ fn osc_listener(beat_predictor: Arc<Mutex<BeatPredictor>>, external_beat_divider
                     beat_predictor.lock().unwrap().multiplicator = mult;
                     params.beat_divider = 1;
                 }
+            },
+            "/loop_range" => {
+                let from = msg.args[0].clone().float().ok_or(())?;
+                let to = msg.args[1].clone().float().ok_or(())?;
+                params.edit_state_mut().loop_range = Some((from, to));
+            },
+            "/active_slot" => {
+                params.active_slot = (msg.args[0].clone().int().ok_or(())?) as usize;
+            },
+            "/edit_slot" => {
+                params.edit_slot = (msg.args[0].clone().int().ok_or(())?) as usize;
             },
             _ => {
                 eprintln!("Unhandled OSC address: {}", msg.addr);
