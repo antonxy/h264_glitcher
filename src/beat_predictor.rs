@@ -3,14 +3,14 @@ use std::collections::VecDeque;
 
 pub struct BeatPredictor {
     input_beats: VecDeque<Instant>,
-    pub multiplicator: f32,
+    pub multiplier: f32,
 }
 
 impl BeatPredictor {
     pub fn new() -> Self {
         Self {
             input_beats: VecDeque::new(),
-            multiplicator: 1.0,
+            multiplier: 1.0,
         }
     }
 
@@ -29,7 +29,7 @@ impl BeatPredictor {
 
         let time = Instant::now() + offset;
         let dur_since_last_input_beat = time - self.input_beats[1];
-        let beat_length = (self.input_beats[1] - self.input_beats[0]).mul_f32(self.multiplicator);
+        let beat_length = (self.input_beats[1] - self.input_beats[0]).mul_f32(self.multiplier);
         let dur_since_last_beat = Duration::from_micros((dur_since_last_input_beat.as_micros() % beat_length.as_micros()) as u64);
         let dur_to_next_beat = beat_length - dur_since_last_beat;
         Some(dur_to_next_beat)

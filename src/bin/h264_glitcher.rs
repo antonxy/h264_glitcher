@@ -1,6 +1,7 @@
 use h264_glitcher::h264::*;
 use h264_glitcher::beat_predictor::BeatPredictor;
 use h264_glitcher::fps_loop::{LoopTimer, LoopController};
+use h264_glitcher::osc_var::{OscVar, LoopRange, OscValue};
 
 extern crate structopt;
 
@@ -41,150 +42,34 @@ struct Opt {
     external_beat_divider: u32,
 }
 
-#[derive(Clone)]
-struct OSCVar<T> {
-    value: T,
-    changed_outgoing: bool,
-    changed_incoming: bool,
-    address: String,
-}
-
-impl<T: Default> Default for OSCVar<T> {
-    fn default() -> Self {
-        Self { value: T::default(), changed_outgoing: true, changed_incoming: false, address: "".to_string() }
-    }
-}
-
-impl<T> Deref for OSCVar<T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        &self.value
-    }
-}
-
-impl<T : PartialEq + OscValue + Copy + OscValue<Target = T>> OSCVar<T> {
-    fn new<S: Into<String>>(address: S, value: T) -> Self {
-        Self { value: value, changed_outgoing: true, changed_incoming: false, address: address.into() }
-    }
-
-    fn set(&mut self, value: T) {
-        if self.value != value {
-            self.value = value;
-            self.changed_outgoing = true;
-        }
-    }
-
-    fn set_changed(&mut self) {
-        self.changed_outgoing = true;
-    }
-
-    fn set_handled(&mut self) {
-        self.changed_incoming = false;
-    }
-
-    fn send(&mut self, socket: &UdpSocket, client_addr: &SocketAddr) {
-        let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
-            addr: self.address.clone(),
-            args: self.value.to_args(),
-        })).unwrap();
-        socket.send_to(&msg_buf, client_addr).unwrap();
-        self.changed_outgoing = false;
-    }
-
-    fn send_if_changed(&mut self, socket: &UdpSocket, client_addr: &SocketAddr) {
-        if self.changed_outgoing {
-            self.send(socket, client_addr);
-        }
-    }
-
-    fn handle_osc_message(&mut self, msg: &OscMessage) -> bool {
-        if msg.addr == self.address {
-            self.set(T::try_from_args(&msg.args).unwrap());
-            self.changed_incoming = true;
-            true
-        } else {
-            false
-        }
-    }
-}
-
-trait OscValue {
-    type Target;
-    fn to_args(self) -> Vec<OscType>;
-    fn try_from_args(args: &Vec<OscType>) -> Option<Self::Target>;
-}
-
-#[derive(PartialEq, Copy, Clone)]
-struct LoopRange(Option<(f32, f32)>);
-impl OscValue for LoopRange {
-    type Target = LoopRange;
-    fn to_args(self) -> Vec<OscType> {
-        match self.0 {
-            Some((from, to)) => vec![Into::into(from), Into::into(to)],
-            None => vec![Into::into(0.0), Into::into(1.0)],
-        }
-        
-    }
-
-    fn try_from_args(args: &Vec<OscType>) -> Option<Self> {
-        Some(Self(Some((args[0].clone().float()?, args[1].clone().float()?))))
-    }
-}
-
-macro_rules! value_impl {
-    ($(($name:ident, $variant:ident, $ty:ty)),*) => {
-        $(
-        impl OscValue for $ty {
-            type Target = $ty;
-            fn to_args(self) -> Vec<OscType> {
-                vec![Into::into(self)]
-            }
-        
-            fn try_from_args(args: &Vec<OscType>) -> Option<Self::Target> {
-                Some(args[0].clone().$name()?)
-            }
-        }
-        )*
-    }
-}
-value_impl! {
-    (int, Int, i32),
-    (float, Float, f32),
-    (string, String, String),
-    (long, Long, i64),
-    (double, Double, f64),
-    (char, Char, char),
-    (bool, Bool, bool)
-}
 
 
 
 #[derive(Clone)]
 struct State {
-    video_num: OSCVar<i32>,
-    beat_multiplier: OSCVar<f32>,
-    pass_iframe: OSCVar<bool>,
-    playhead: OSCVar<f32>,
-    loop_range: OSCVar<LoopRange>,
-    auto_skip: OSCVar<bool>,
-    drop_frames: OSCVar<bool>,
-    loop_to_beat: OSCVar<bool>,
-    fps: OSCVar<f32>,
+    video_num: OscVar<i32>,
+    beat_multiplier: OscVar<i32>,
+    pass_iframe: OscVar<bool>,
+    playhead: OscVar<f32>,
+    loop_range: OscVar<LoopRange>,
+    auto_skip: OscVar<bool>,
+    drop_frames: OscVar<bool>,
+    loop_to_beat: OscVar<bool>,
+    fps: OscVar<f32>,
 }
 
 impl Default for State {
     fn default() -> Self {
         Self {
-            video_num: OSCVar::new("/video_num", 0),
-            beat_multiplier: OSCVar::new("/beat_multiplier", 1.0),
-            pass_iframe: OSCVar::new("/pass_iframe", false),
-            playhead: OSCVar::new("/playhead", 0.0),
-            loop_range: OSCVar::new("/loop_range", LoopRange(None)),
-            auto_skip: OSCVar::new("/auto_skip", false),
-            drop_frames: OSCVar::new("/drop_frames", false),
-            loop_to_beat: OSCVar::new("/loop_to_beat", false),
-            fps: OSCVar::new("/fps", 30.0),
+            video_num: OscVar::new("/video_num", 0),
+            beat_multiplier: OscVar::new("/beat_multiplier", 0),
+            pass_iframe: OscVar::new("/pass_iframe", false),
+            playhead: OscVar::new("/playhead", 0.0),
+            loop_range: OscVar::new("/loop_range", LoopRange(None)),
+            auto_skip: OscVar::new("/auto_skip", false),
+            drop_frames: OscVar::new("/drop_frames", false),
+            loop_to_beat: OscVar::new("/loop_to_beat", false),
+            fps: OscVar::new("/fps", 30.0),
         }
     }
 }
@@ -236,15 +121,15 @@ struct StreamingParams {
     client_addr: Option<SocketAddr>,
     
     auto_switch_n: usize,
-    use_external_beat: bool,
-    beat_offset: Duration,
+    use_external_beat: OscVar<bool>,
+    beat_offset: OscVar<Duration>,
     beat_divider: u32,
 
     state_slots: Vec<State>,
-    active_slot: usize,
-    edit_slot: usize,
+    active_slot: OscVar<usize>,
+    edit_slot: OscVar<usize>,
 
-    is_live: OSCVar<bool>,
+    is_live: OscVar<bool>,
 }
 
 impl Default for StreamingParams {
@@ -254,15 +139,15 @@ impl Default for StreamingParams {
             skip_frames: None,
             client_addr: None,
             auto_switch_n: 0,
-            use_external_beat: false,
-            beat_offset: Duration::from_millis(0),
+            use_external_beat: OscVar::new("/use_external_beat", false),
+            beat_offset: OscVar::new("/beat_offset", Duration::from_millis(0)),
             beat_divider: 1,
 
             state_slots: vec![State::default(); 6],
-            active_slot: 0,
-            edit_slot: 0,
+            active_slot: OscVar::new("/active_slot", 0),
+            edit_slot: OscVar::new("/edit_slot", 0),
 
-            is_live: OSCVar::new("/is_live", true),
+            is_live: OscVar::new("/is_live", true),
         }
     }
 }
@@ -270,41 +155,50 @@ impl Default for StreamingParams {
 impl StreamingParams {
     fn set_active_slot(&mut self, slot: usize) {
         assert!(slot < 6);
-        self.active_slot = slot;
+        self.active_slot.set(slot);
+        self.active_state_mut().set_changed();
 
-        self.is_live.set(self.active_slot == self.edit_slot);
+        self.is_live.set(*self.active_slot == *self.edit_slot);
     }
 
     fn set_edit_slot(&mut self, slot: usize) {
         assert!(slot < 6);
-        self.edit_slot = slot;
+        self.edit_slot.set(slot);
         self.edit_state_mut().set_changed();
 
-        self.is_live.set(self.active_slot == self.edit_slot);
+        self.is_live.set(*self.active_slot == *self.edit_slot);
     }
 
     fn active_state(&self) -> &State {
-        &self.state_slots[self.active_slot]
+        &self.state_slots[*self.active_slot]
     }
 
     fn active_state_mut(&mut self) -> &mut State {
-        &mut self.state_slots[self.active_slot]
+        &mut self.state_slots[*self.active_slot]
     }
 
     fn edit_state(&self) -> &State {
-        &self.state_slots[self.edit_slot]
+        &self.state_slots[*self.edit_slot]
     }
     
     fn edit_state_mut(&mut self) -> &mut State {
-        &mut self.state_slots[self.edit_slot]
+        &mut self.state_slots[*self.edit_slot]
     }
 
     fn send_changed(&mut self, socket: &UdpSocket, client_addr: &SocketAddr) {
+        self.use_external_beat.send_if_changed(socket, client_addr);
+        self.beat_offset.send_if_changed(socket, client_addr);
+        self.active_slot.send_if_changed(socket, client_addr);
+        self.edit_slot.send_if_changed(socket, client_addr);
         self.edit_state_mut().send_changed(socket, client_addr);
         self.is_live.send_if_changed(socket, client_addr);
     }
 
     fn handle_osc_message(&mut self, msg: &OscMessage) -> bool {
+        self.use_external_beat.handle_osc_message(msg);
+        self.beat_offset.handle_osc_message(msg);
+        self.active_slot.handle_osc_message(msg);
+        self.edit_slot.handle_osc_message(msg);
         self.edit_state_mut().handle_osc_message(msg)
     }
 }
@@ -437,18 +331,6 @@ fn main() -> std::io::Result<()> {
         Ok(())
     };
 
-    // let open_h264_file = |path| -> std::io::Result<_> {
-    //     eprintln!("Open file {:?}", path);
-    //     let input_file = File::open(path)?;
-    //     let file = std::io::BufReader::with_capacity(1<<20, input_file);
-    //     let it = NalIterator::new(file.bytes().map(|x| x.unwrap()));
-    //     let it = it.map(|data| NalUnit::from_bytes(&data));
-    //     Ok(it)
-    // };
-
-
-
-    //let mut h264_iter = open_h264_file(&paths[0])?;
     let mut current_video_num: usize = 0;
     let mut current_video: LoadedVideo = LoadedVideo::load(&paths[0])?;
     let mut current_frame: usize = 0;
@@ -586,21 +468,9 @@ fn video_name_sender(send_sock: Arc<Mutex<UdpSocket>>, streaming_params: Arc<Mut
     loop {
         let params = streaming_params.lock().unwrap().clone();
         if let Some(client_addr) = params.client_addr {
-            // Send auto-states
-            let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
-                addr: "/auto_skip".to_string(),
-                args: params.edit_state().auto_skip.to_args(),
-            })).unwrap();
-            send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
             let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
                 addr: "/auto_switch".to_string(),
                 args: (params.auto_switch_n as i32).to_args(),
-            })).unwrap();
-            send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
-            // Send beat_offset
-            let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
-                addr: "/beat_offset".to_string(),
-                args: params.beat_offset.as_secs_f32().to_args(),
             })).unwrap();
             send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
 
@@ -652,7 +522,7 @@ fn beat_thread(beat_predictor: Arc<Mutex<BeatPredictor>>, switch_history: Arc<Mu
 
     loop {
         let params = streaming_params.lock().unwrap().clone();
-        let next_beat_dur = beat_predictor.lock().unwrap().duration_to_next_beat(params.beat_offset);
+        let next_beat_dur = beat_predictor.lock().unwrap().duration_to_next_beat(*params.beat_offset);
         if let Some(next_beat_dur) = next_beat_dur {
             // Sleep max 100ms so that we don't miss if the beat speed changes from a very low
             // one to a high one
@@ -758,16 +628,13 @@ fn osc_listener(beat_predictor: Arc<Mutex<BeatPredictor>>, external_beat_divider
                 "/auto_switch" => {
                     params.auto_switch_n = msg.args[0].clone().int().ok_or(())? as usize;
                 },
-                "/use_external_beat" => {
-                    params.use_external_beat = msg.args[0].clone().bool().ok_or(())?;
-                },
                 "/manual_beat" => {
-                    if !params.use_external_beat {
+                    if !*params.use_external_beat {
                         beat_predictor.lock().unwrap().put_input_beat();
                     }
                 },
                 "/traktor/beat" => {
-                    if params.use_external_beat {
+                    if *params.use_external_beat {
                         beat_i += 1;
                         if beat_i >= external_beat_divider {
                             beat_i = 0;
@@ -785,35 +652,36 @@ fn osc_listener(beat_predictor: Arc<Mutex<BeatPredictor>>, external_beat_divider
                         beat_i = 0;
                     }
                 },
-                "/beat_offset" => {
-                    params.beat_offset = Duration::from_secs_f32(msg.args[0].clone().float().ok_or(())?);
+                "/reset" => {
+                    *params.edit_state_mut() = State::default();
                 },
-                "/beat_multiplicator" => {
-                    let step = -msg.args[0].clone().int().ok_or(())? + 2;
-                    if step > 0 {
-                        beat_predictor.lock().unwrap().multiplicator = 1.0;
-                        params.beat_divider = 1 << step;
-                    } else {
-                        let mult = f32::powi(2.0, step);
-                        beat_predictor.lock().unwrap().multiplicator = mult;
-                        params.beat_divider = 1;
+                "/copy_active" => {
+                    if *params.active_slot == *params.edit_slot {
+                        params.edit_slot.set((*params.edit_slot + 1) % 6);
                     }
-                },
-                "/active_slot" => {
-                    params.set_active_slot((msg.args[0].clone().int().ok_or(())?) as usize);
-                },
-                "/edit_slot" => {
-                    params.set_edit_slot((msg.args[0].clone().int().ok_or(())?) as usize);
-                },
+                    *params.edit_state_mut() = params.active_state().clone();
+                    params.edit_state_mut().set_changed();
+                }
                 _ => {
                     eprintln!("Unhandled OSC address: {}", msg.addr);
                     eprintln!("Unhandled OSC arguments: {:?}", msg.args);
                     return Err(());
                 }
             }
-            if params.active_state().fps.changed_incoming {
-                fps_controller.set_fps(*params.active_state().fps);
-            }
+        }
+        if params.active_state().fps.changed() {
+            fps_controller.set_fps(*params.active_state().fps);
+            params.active_state_mut().fps.set_handled();
+        }
+        if params.active_state().beat_multiplier.changed() {
+            beat_predictor.lock().unwrap().multiplier = 0.5_f32.powi(*params.active_state().beat_multiplier);
+            params.active_state_mut().beat_multiplier.set_handled();
+        }
+        if params.active_slot.changed() {
+            params.set_active_slot(*params.active_slot);
+        }
+        if params.edit_slot.changed() {
+            params.set_edit_slot(*params.edit_slot);
         }
         Ok(())
     };
