@@ -4,9 +4,10 @@ use h264_glitcher::fps_loop::{LoopTimer, LoopController};
 
 extern crate structopt;
 
+use std::convert::TryInto;
 use std::fs::File;
 use std::io::{Read, Write};
-use std::ops::Add;
+use std::ops::{Add, Deref};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::mpsc::{SyncSender, TrySendError};
@@ -40,30 +41,201 @@ struct Opt {
     external_beat_divider: u32,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
+struct OSCVar<T> {
+    value: T,
+    changed_outgoing: bool,
+    changed_incoming: bool,
+    address: String,
+}
+
+impl<T: Default> Default for OSCVar<T> {
+    fn default() -> Self {
+        Self { value: T::default(), changed_outgoing: true, changed_incoming: false, address: "".to_string() }
+    }
+}
+
+impl<T> Deref for OSCVar<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.value
+    }
+}
+
+impl<T : PartialEq + OscValue + Copy + OscValue<Target = T>> OSCVar<T> {
+    fn new<S: Into<String>>(address: S, value: T) -> Self {
+        Self { value: value, changed_outgoing: true, changed_incoming: false, address: address.into() }
+    }
+
+    fn set(&mut self, value: T) {
+        if self.value != value {
+            self.value = value;
+            self.changed_outgoing = true;
+        }
+    }
+
+    fn set_changed(&mut self) {
+        self.changed_outgoing = true;
+    }
+
+    fn set_handled(&mut self) {
+        self.changed_incoming = false;
+    }
+
+    fn send(&mut self, socket: &UdpSocket, client_addr: &SocketAddr) {
+        let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
+            addr: self.address.clone(),
+            args: self.value.to_args(),
+        })).unwrap();
+        socket.send_to(&msg_buf, client_addr).unwrap();
+        self.changed_outgoing = false;
+    }
+
+    fn send_if_changed(&mut self, socket: &UdpSocket, client_addr: &SocketAddr) {
+        if self.changed_outgoing {
+            self.send(socket, client_addr);
+        }
+    }
+
+    fn handle_osc_message(&mut self, msg: &OscMessage) -> bool {
+        if msg.addr == self.address {
+            self.set(T::try_from_args(&msg.args).unwrap());
+            self.changed_incoming = true;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+trait OscValue {
+    type Target;
+    fn to_args(self) -> Vec<OscType>;
+    fn try_from_args(args: &Vec<OscType>) -> Option<Self::Target>;
+}
+
+#[derive(PartialEq, Copy, Clone)]
+struct LoopRange(Option<(f32, f32)>);
+impl OscValue for LoopRange {
+    type Target = LoopRange;
+    fn to_args(self) -> Vec<OscType> {
+        match self.0 {
+            Some((from, to)) => vec![Into::into(from), Into::into(to)],
+            None => vec![Into::into(0.0), Into::into(1.0)],
+        }
+        
+    }
+
+    fn try_from_args(args: &Vec<OscType>) -> Option<Self> {
+        Some(Self(Some((args[0].clone().float()?, args[1].clone().float()?))))
+    }
+}
+
+macro_rules! value_impl {
+    ($(($name:ident, $variant:ident, $ty:ty)),*) => {
+        $(
+        impl OscValue for $ty {
+            type Target = $ty;
+            fn to_args(self) -> Vec<OscType> {
+                vec![Into::into(self)]
+            }
+        
+            fn try_from_args(args: &Vec<OscType>) -> Option<Self::Target> {
+                Some(args[0].clone().$name()?)
+            }
+        }
+        )*
+    }
+}
+value_impl! {
+    (int, Int, i32),
+    (float, Float, f32),
+    (string, String, String),
+    (long, Long, i64),
+    (double, Double, f64),
+    (char, Char, char),
+    (bool, Bool, bool)
+}
+
+
+
+#[derive(Clone)]
 struct State {
-    video_num: usize,
-    beat_multiplier: f32,
-    pass_iframe: bool,
-    playhead: f32,
-    loop_range: Option<(f32, f32)>,
-    auto_skip: bool,
-    drop_frames: bool,
+    video_num: OSCVar<i32>,
+    beat_multiplier: OSCVar<f32>,
+    pass_iframe: OSCVar<bool>,
+    playhead: OSCVar<f32>,
+    loop_range: OSCVar<LoopRange>,
+    auto_skip: OSCVar<bool>,
+    drop_frames: OSCVar<bool>,
+    loop_to_beat: OSCVar<bool>,
+    fps: OSCVar<f32>,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            video_num: OSCVar::new("/video_num", 0),
+            beat_multiplier: OSCVar::new("/beat_multiplier", 1.0),
+            pass_iframe: OSCVar::new("/pass_iframe", false),
+            playhead: OSCVar::new("/playhead", 0.0),
+            loop_range: OSCVar::new("/loop_range", LoopRange(None)),
+            auto_skip: OSCVar::new("/auto_skip", false),
+            drop_frames: OSCVar::new("/drop_frames", false),
+            loop_to_beat: OSCVar::new("/loop_to_beat", false),
+            fps: OSCVar::new("/fps", 30.0),
+        }
+    }
+}
+
+impl State {
+    fn send_changed(&mut self, socket: &UdpSocket, client_addr: &SocketAddr) {
+        self.video_num.send_if_changed(socket, client_addr);
+        self.beat_multiplier.send_if_changed(socket, client_addr);
+        self.pass_iframe.send_if_changed(socket, client_addr);
+        self.playhead.send_if_changed(socket, client_addr);
+        self.loop_range.send_if_changed(socket, client_addr);
+        self.auto_skip.send_if_changed(socket, client_addr);
+        self.drop_frames.send_if_changed(socket, client_addr);
+        self.loop_to_beat.send_if_changed(socket, client_addr);
+        self.fps.send_if_changed(socket, client_addr);
+    }
+
+    fn set_changed(&mut self) {
+        self.video_num.set_changed();
+        self.beat_multiplier.set_changed();
+        self.pass_iframe.set_changed();
+        self.playhead.set_changed();
+        self.loop_range.set_changed();
+        self.auto_skip.set_changed();
+        self.drop_frames.set_changed();
+        self.loop_to_beat.set_changed();
+        self.fps.set_changed();
+    }
+
+    fn handle_osc_message(&mut self, msg: &OscMessage) -> bool {
+        //self.video_num.handle_osc_message(msg) ||
+        self.beat_multiplier.handle_osc_message(msg) ||
+        self.pass_iframe.handle_osc_message(msg) ||
+        //self.playhead.handle_osc_message(msg) ||
+        self.loop_range.handle_osc_message(msg) ||
+        self.auto_skip.handle_osc_message(msg) ||
+        self.drop_frames.handle_osc_message(msg) ||
+        self.loop_to_beat.handle_osc_message(msg) ||
+        self.fps.handle_osc_message(msg)
+    }
 }
 
 
 #[derive(Clone)]
 struct StreamingParams {
-    record_loop: bool,
-
-    cut_loop: Option<f32>,
     restart_loop: bool,
 
     skip_frames: Option<usize>,
     client_addr: Option<SocketAddr>,
     
     auto_switch_n: usize,
-    loop_to_beat: bool,
     use_external_beat: bool,
     beat_offset: Duration,
     beat_divider: u32,
@@ -71,18 +243,17 @@ struct StreamingParams {
     state_slots: Vec<State>,
     active_slot: usize,
     edit_slot: usize,
+
+    is_live: OSCVar<bool>,
 }
 
 impl Default for StreamingParams {
     fn default() -> Self {
         Self {
-            record_loop: false,
-            cut_loop: None,
             restart_loop: false,
             skip_frames: None,
             client_addr: None,
             auto_switch_n: 0,
-            loop_to_beat: false,
             use_external_beat: false,
             beat_offset: Duration::from_millis(0),
             beat_divider: 1,
@@ -90,11 +261,28 @@ impl Default for StreamingParams {
             state_slots: vec![State::default(); 6],
             active_slot: 0,
             edit_slot: 0,
+
+            is_live: OSCVar::new("/is_live", true),
         }
     }
 }
 
 impl StreamingParams {
+    fn set_active_slot(&mut self, slot: usize) {
+        assert!(slot < 6);
+        self.active_slot = slot;
+
+        self.is_live.set(self.active_slot == self.edit_slot);
+    }
+
+    fn set_edit_slot(&mut self, slot: usize) {
+        assert!(slot < 6);
+        self.edit_slot = slot;
+        self.edit_state_mut().set_changed();
+
+        self.is_live.set(self.active_slot == self.edit_slot);
+    }
+
     fn active_state(&self) -> &State {
         &self.state_slots[self.active_slot]
     }
@@ -109,6 +297,15 @@ impl StreamingParams {
     
     fn edit_state_mut(&mut self) -> &mut State {
         &mut self.state_slots[self.edit_slot]
+    }
+
+    fn send_changed(&mut self, socket: &UdpSocket, client_addr: &SocketAddr) {
+        self.edit_state_mut().send_changed(socket, client_addr);
+        self.is_live.send_if_changed(socket, client_addr);
+    }
+
+    fn handle_osc_message(&mut self, msg: &OscMessage) -> bool {
+        self.edit_state_mut().handle_osc_message(msg)
     }
 }
 
@@ -252,7 +449,7 @@ fn main() -> std::io::Result<()> {
 
 
     //let mut h264_iter = open_h264_file(&paths[0])?;
-    let mut current_video_num = 0;
+    let mut current_video_num: usize = 0;
     let mut current_video: LoadedVideo = LoadedVideo::load(&paths[0])?;
     let mut current_frame: usize = 0;
 
@@ -260,7 +457,7 @@ fn main() -> std::io::Result<()> {
         let (mut from_incl, mut to_excl) = (0, total_frames);
 
         //TODO don't lock every fucking time
-        if let Some((loop_from, loop_to)) = streaming_params.lock().unwrap().active_state().loop_range {
+        if let Some((loop_from, loop_to)) = streaming_params.lock().unwrap().active_state().loop_range.0 {
             let loop_from = (total_frames as f32 * loop_from) as usize;
             let loop_to = (total_frames as f32 * loop_to) as usize;
 
@@ -326,10 +523,15 @@ fn main() -> std::io::Result<()> {
         // Process all "requests"
 
         // Switch video if requested
-        if current_video_num != state.video_num && state.video_num < paths.len() {
-            current_video_num = state.video_num;
-            current_video = LoadedVideo::load(&paths[state.video_num])?;
+        if current_video_num as i32 != *state.video_num && *state.video_num < paths.len() as i32 {
+            current_video_num = *state.video_num as usize;
+            current_video = LoadedVideo::load(&paths[current_video_num])?;
             current_frame = 0;
+        }
+
+        if params.restart_loop {
+            current_frame = 0; // Will be set to loop start by advance_frame(...)
+            streaming_params.lock().unwrap().restart_loop = false;
         }
 
         // Now the state based stuff
@@ -337,7 +539,7 @@ fn main() -> std::io::Result<()> {
 
         
         // Play from file
-        if state.drop_frames {
+        if *state.drop_frames {
             advance_frame(&mut current_frame, current_video.frames.len());
         }
 
@@ -354,7 +556,7 @@ fn main() -> std::io::Result<()> {
         
         // If pass_iframe is not activated, send only CodedSliceNonIdr
         // Sending a new SPS without an Idr Slice seems to cause problems when switching between some videos
-        if nal_unit.nal_unit_type == NALUnitType::CodedSliceNonIdr || state.pass_iframe {
+        if nal_unit.nal_unit_type == NALUnitType::CodedSliceNonIdr || *state.pass_iframe {
             write_frame(&nal_unit)?;
             let is_picture_data = nal_unit.nal_unit_type.is_picture_data();
             if !is_picture_data {
@@ -365,13 +567,12 @@ fn main() -> std::io::Result<()> {
         }
 
         let playhead = current_frame as f32 / current_video.frames.len() as f32;
-        streaming_params.lock().unwrap().active_state_mut().playhead = playhead;
-        if let Some(client_addr) = params.client_addr {
-            let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
-                addr: "/playhead".to_string(),
-                args: vec![playhead.into()],
-            })).unwrap();
-            send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
+        {
+            let mut streaming_params = streaming_params.lock().unwrap();
+            streaming_params.active_state_mut().playhead.set(playhead);
+            if let Some(addr) = params.client_addr {
+                streaming_params.send_changed(&send_sock.lock().unwrap(), &addr);
+            }
         }
 
         loop_timer.end_loop();
@@ -385,27 +586,21 @@ fn video_name_sender(send_sock: Arc<Mutex<UdpSocket>>, streaming_params: Arc<Mut
     loop {
         let params = streaming_params.lock().unwrap().clone();
         if let Some(client_addr) = params.client_addr {
-            // Send FPS
-            let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
-                addr: "/fps".to_string(),
-                args: vec![loop_controller.fps().into()],
-            })).unwrap();
-            send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
             // Send auto-states
             let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
                 addr: "/auto_skip".to_string(),
-                args: vec![params.edit_state().auto_skip.into()],
+                args: params.edit_state().auto_skip.to_args(),
             })).unwrap();
             send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
             let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
                 addr: "/auto_switch".to_string(),
-                args: vec![(params.auto_switch_n as i32).into()],
+                args: (params.auto_switch_n as i32).to_args(),
             })).unwrap();
             send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
             // Send beat_offset
             let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
                 addr: "/beat_offset".to_string(),
-                args: vec![params.beat_offset.as_secs_f32().into()],
+                args: params.beat_offset.as_secs_f32().to_args(),
             })).unwrap();
             send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
 
@@ -425,13 +620,13 @@ fn video_name_sender(send_sock: Arc<Mutex<UdpSocket>>, streaming_params: Arc<Mut
 
                 let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
                     addr: format!("/label_{}", i).to_string(),
-                    args: vec![filename.into()/*, color.into()*/],
+                    args: filename.to_args(),
                 })).unwrap();
                 send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
 
                 let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
                     addr: format!("/label_{}/color", i).to_string(),
-                    args: vec![color.into()],
+                    args: color.to_string().to_args(),
                 })).unwrap();
                 send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
             }
@@ -439,10 +634,12 @@ fn video_name_sender(send_sock: Arc<Mutex<UdpSocket>>, streaming_params: Arc<Mut
             for (j, thumbnail) in thumbnails.iter().enumerate() {
                 let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
                     addr: format!("/thumbnail_{}", j).to_string(),
-                    args: vec![thumbnail.to_string().into()],
+                    args: thumbnail.to_string().to_args(),
                 })).unwrap();
                 send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
             }
+
+            streaming_params.lock().unwrap().send_changed(&send_sock.lock().unwrap(), &client_addr);
         }
         std::thread::sleep(Duration::from_millis(1000));
     }
@@ -480,7 +677,7 @@ fn beat_thread(beat_predictor: Arc<Mutex<BeatPredictor>>, switch_history: Arc<Mu
 
                     // Do the beat stuff here
                     let mut params = streaming_params.lock().unwrap();
-                    if params.active_state().auto_skip {
+                    if *params.active_state().auto_skip {
                         params.skip_frames = Some(20);
                         fps_controller.wake_up_now();
                     }
@@ -492,12 +689,12 @@ fn beat_thread(beat_predictor: Arc<Mutex<BeatPredictor>>, switch_history: Arc<Mu
                             auto_switch_num = 0;
                         }
                         if switch_history.len() > 0 {
-                            params.active_state_mut().video_num = switch_history[auto_switch_num];
+                            params.active_state_mut().video_num.set(switch_history[auto_switch_num] as i32);
                             fps_controller.wake_up_now();
                         }
                     }
 
-                    if params.loop_to_beat {
+                    if *params.active_state().loop_to_beat {
                         params.restart_loop = true;
                     }
                 }
@@ -518,113 +715,104 @@ fn osc_listener(beat_predictor: Arc<Mutex<BeatPredictor>>, external_beat_divider
     let mut beat_i = 0;
 
     let mut parse_message = |msg: &OscMessage, params: &mut StreamingParams, client_addr: SocketAddr, switch_history: &mut VecDeque<usize>| -> Result<(), ()> {
-        match msg.addr.as_str() {
-            "/set_client_address" => {
-                params.client_addr = Some(client_addr);
-                eprintln!("updated client_addr: {:?}", params.client_addr);
-            },
-            "/fps" => {
-                fps_controller.set_fps(msg.args[0].clone().float().ok_or(())?);
-            },
-            "/record_loop" => {
-                let record_loop = msg.args[0].clone().bool().ok_or(())?;
-                if record_loop {
-                    let (_, to) = params.active_state().loop_range.unwrap_or((0.0, 1.0));
-                    params.active_state_mut().loop_range = Some((params.active_state().playhead, to));
-                } else {
-                    let (from, _) = params.active_state().loop_range.unwrap_or((0.0, 1.0));
-                    params.active_state_mut().loop_range = Some((from, params.active_state().playhead));
-                }
-            },
-            "/play_loop" => {
-                //params.play_loop = msg.args[0].clone().bool().ok_or(())?;
-            },
-            "/cut_loop" => {
-                params.cut_loop = Some(msg.args[0].clone().float().ok_or(())?);
-            },
-            "/pass_iframe" => {
-                params.edit_state_mut().pass_iframe = msg.args[0].clone().bool().ok_or(())?;
-            },
-            "/drop_frames" => {
-                params.edit_state_mut().drop_frames = msg.args[0].clone().bool().ok_or(())?;
-            },
-            "/skip_frames" => {
-                params.skip_frames = Some(msg.args[0].clone().int().ok_or(())? as usize);
-                fps_controller.wake_up_now();
-            },
-            "/video_num" => {
-                params.edit_state_mut().video_num = msg.args[0].clone().int().ok_or(())? as usize;
-                fps_controller.wake_up_now();
-                if switch_history.len() == 5 {
-                    switch_history.pop_back();
-                }
-                switch_history.push_front(params.edit_state().video_num);
-            },
-            "/auto_skip" => {
-                params.edit_state_mut().auto_skip = msg.args[0].clone().bool().ok_or(())?;
-            },
-            "/auto_switch" => {
-                params.auto_switch_n = msg.args[0].clone().int().ok_or(())? as usize;
-            },
-            "/loop_to_beat" => {
-                params.loop_to_beat = msg.args[0].clone().bool().ok_or(())?;
-            },
-            "/use_external_beat" => {
-                params.use_external_beat = msg.args[0].clone().bool().ok_or(())?;
-            },
-            "/manual_beat" => {
-                if !params.use_external_beat {
-                    beat_predictor.lock().unwrap().put_input_beat();
-                }
-            },
-            "/traktor/beat" => {
-                if params.use_external_beat {
-                    beat_i += 1;
-                    if beat_i >= external_beat_divider {
-                        beat_i = 0;
-                        beat_predictor.lock().unwrap().put_input_beat();
-                        if let Some(client_addr) = params.client_addr {
-                            // Send beat
-                            let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
-                                addr: "/traktor/beat".to_string(),
-                                args: vec![OscType::Int(1)],
-                            })).unwrap();
-                            send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
-                        }
+        if params.handle_osc_message(&msg) {}
+        else {
+            match msg.addr.as_str() {
+                "/set_client_address" => {
+                    params.client_addr = Some(client_addr);
+                    eprintln!("updated client_addr: {:?}", params.client_addr);
+                },
+                "/record_loop" => {
+                    let record_loop = msg.args[0].clone().bool().ok_or(())?;
+                    if record_loop {
+                        let from = *params.active_state().playhead;
+                        let (_, to) = params.active_state().loop_range.0.unwrap_or((0.0, 1.0));
+                        params.active_state_mut().loop_range.set(LoopRange(Some((from, to))));
+                    } else {
+                        let (from, _) = params.active_state().loop_range.0.unwrap_or((0.0, 1.0));
+                        let to = *params.active_state().playhead;
+                        params.active_state_mut().loop_range.set(LoopRange(Some((from, to))));
                     }
-                } else {
-                    beat_i = 0;
+                },
+                "/clear_loop" => {
+                    params.edit_state_mut().loop_range.set(LoopRange(None));
                 }
-            },
-            "/beat_offset" => {
-                params.beat_offset = Duration::from_secs_f32(msg.args[0].clone().float().ok_or(())?);
-            },
-            "/beat_multiplicator" => {
-                let step = -msg.args[0].clone().int().ok_or(())? + 2;
-                if step > 0 {
-                    beat_predictor.lock().unwrap().multiplicator = 1.0;
-                    params.beat_divider = 1 << step;
-                } else {
-                    let mult = f32::powi(2.0, step);
-                    beat_predictor.lock().unwrap().multiplicator = mult;
-                    params.beat_divider = 1;
+                "/cut_loop" => {
+                    let loop_range = &mut params.edit_state_mut().loop_range;
+                    let range = loop_range.0.unwrap_or((0.0, 1.0));
+                    let new_range = (range.0, range.0 + (range.1 - range.0) * msg.args[0].clone().float().ok_or(())?);
+                    loop_range.set(LoopRange(Some(new_range)));
+                },
+                "/skip_frames" => {
+                    params.skip_frames = Some(msg.args[0].clone().int().ok_or(())? as usize);
+                    fps_controller.wake_up_now();
+                },
+                "/video_num" => {
+                    params.edit_state_mut().video_num.set(msg.args[0].clone().int().ok_or(())?);
+                    fps_controller.wake_up_now();
+                    if switch_history.len() == 5 {
+                        switch_history.pop_back();
+                    }
+                    switch_history.push_front(*params.edit_state().video_num as usize);
+                },
+                "/auto_switch" => {
+                    params.auto_switch_n = msg.args[0].clone().int().ok_or(())? as usize;
+                },
+                "/use_external_beat" => {
+                    params.use_external_beat = msg.args[0].clone().bool().ok_or(())?;
+                },
+                "/manual_beat" => {
+                    if !params.use_external_beat {
+                        beat_predictor.lock().unwrap().put_input_beat();
+                    }
+                },
+                "/traktor/beat" => {
+                    if params.use_external_beat {
+                        beat_i += 1;
+                        if beat_i >= external_beat_divider {
+                            beat_i = 0;
+                            beat_predictor.lock().unwrap().put_input_beat();
+                            if let Some(client_addr) = params.client_addr {
+                                // Send beat
+                                let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
+                                    addr: "/traktor/beat".to_string(),
+                                    args: vec![OscType::Int(1)],
+                                })).unwrap();
+                                send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
+                            }
+                        }
+                    } else {
+                        beat_i = 0;
+                    }
+                },
+                "/beat_offset" => {
+                    params.beat_offset = Duration::from_secs_f32(msg.args[0].clone().float().ok_or(())?);
+                },
+                "/beat_multiplicator" => {
+                    let step = -msg.args[0].clone().int().ok_or(())? + 2;
+                    if step > 0 {
+                        beat_predictor.lock().unwrap().multiplicator = 1.0;
+                        params.beat_divider = 1 << step;
+                    } else {
+                        let mult = f32::powi(2.0, step);
+                        beat_predictor.lock().unwrap().multiplicator = mult;
+                        params.beat_divider = 1;
+                    }
+                },
+                "/active_slot" => {
+                    params.set_active_slot((msg.args[0].clone().int().ok_or(())?) as usize);
+                },
+                "/edit_slot" => {
+                    params.set_edit_slot((msg.args[0].clone().int().ok_or(())?) as usize);
+                },
+                _ => {
+                    eprintln!("Unhandled OSC address: {}", msg.addr);
+                    eprintln!("Unhandled OSC arguments: {:?}", msg.args);
+                    return Err(());
                 }
-            },
-            "/loop_range" => {
-                let from = msg.args[0].clone().float().ok_or(())?;
-                let to = msg.args[1].clone().float().ok_or(())?;
-                params.edit_state_mut().loop_range = Some((from, to));
-            },
-            "/active_slot" => {
-                params.active_slot = (msg.args[0].clone().int().ok_or(())?) as usize;
-            },
-            "/edit_slot" => {
-                params.edit_slot = (msg.args[0].clone().int().ok_or(())?) as usize;
-            },
-            _ => {
-                eprintln!("Unhandled OSC address: {}", msg.addr);
-                eprintln!("Unhandled OSC arguments: {:?}", msg.args);
-                return Err(());
+            }
+            if params.active_state().fps.changed_incoming {
+                fps_controller.set_fps(*params.active_state().fps);
             }
         }
         Ok(())
@@ -649,6 +837,12 @@ fn osc_listener(beat_predictor: Arc<Mutex<BeatPredictor>>, external_beat_divider
                 if parse_result.is_err() {
                     eprintln!("Failed to parse OSC Packet: {:?}", packet);
                 }
+
+
+                if let Some(addr) = params.client_addr {
+                    params.send_changed(&send_sock.lock().unwrap(), &addr);
+                }
+
             }
             Err(e) => {
                 eprintln!("Error receiving from socket: {}", e);
