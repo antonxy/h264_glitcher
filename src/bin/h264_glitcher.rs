@@ -195,10 +195,10 @@ impl StreamingParams {
     }
 
     fn handle_osc_message(&mut self, msg: &OscMessage) -> bool {
-        self.use_external_beat.handle_osc_message(msg);
-        self.beat_offset.handle_osc_message(msg);
-        self.active_slot.handle_osc_message(msg);
-        self.edit_slot.handle_osc_message(msg);
+        self.use_external_beat.handle_osc_message(msg) ||
+        self.beat_offset.handle_osc_message(msg) ||
+        self.active_slot.handle_osc_message(msg) ||
+        self.edit_slot.handle_osc_message(msg) ||
         self.edit_state_mut().handle_osc_message(msg)
     }
 }
