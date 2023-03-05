@@ -1152,7 +1152,7 @@
             "decimals": 2,
             "target": "",
             "ignoreDefaults": false,
-            "bypass": false,
+            "bypass": true,
             "onCreate": "",
             "onValue": "",
             "widgets": [],
