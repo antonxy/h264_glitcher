@@ -29,9 +29,13 @@ Potentially interesting parameters:
 - `g=9999999` No keyframes inbetween
 
 ## Run glitcher
+
 ```
 cargo run --release -- -i videos/* |  mpv --no-correct-pts --fps=1000 --no-cache -
 ```
+
+The H.264 stream may crash some GPUs when using hardware decoding.
+Consider to add `--hwdec=no` to your mpv call if you are experiencing problems.
 
 By default the glitcher listens on port 8000 for OSC messages.
 
