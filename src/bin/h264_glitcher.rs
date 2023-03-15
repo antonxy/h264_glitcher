@@ -56,6 +56,8 @@ struct State {
     drop_frames: OscVar<bool>,
     loop_to_beat: OscVar<bool>,
     fps: OscVar<f32>,
+    auto_switch_n: OscVar<i32>,
+    switch_history: VecDeque<usize>,
 }
 
 impl Default for State {
@@ -70,6 +72,8 @@ impl Default for State {
             drop_frames: OscVar::new("/drop_frames", false),
             loop_to_beat: OscVar::new("/loop_to_beat", false),
             fps: OscVar::new("/fps", 30.0),
+            auto_switch_n: OscVar::new("/auto_switch", 0),
+            switch_history: VecDeque::with_capacity(5),
         }
     }
 }
@@ -85,6 +89,7 @@ impl State {
         self.drop_frames.send_if_changed(socket, client_addr);
         self.loop_to_beat.send_if_changed(socket, client_addr);
         self.fps.send_if_changed(socket, client_addr);
+        self.auto_switch_n.send_if_changed(socket, client_addr);
     }
 
     fn set_changed(&mut self) {
@@ -97,10 +102,16 @@ impl State {
         self.drop_frames.set_changed();
         self.loop_to_beat.set_changed();
         self.fps.set_changed();
+        self.auto_switch_n.set_changed();
     }
 
     fn handle_osc_message(&mut self, msg: &OscMessage) -> bool {
-        //self.video_num.handle_osc_message(msg) ||
+        if self.video_num.handle_osc_message(msg) {
+            if self.switch_history.len() == 5 {
+                self.switch_history.pop_back();
+            }
+            self.switch_history.push_front(*self.video_num as usize);
+        }
         self.beat_multiplier.handle_osc_message(msg) ||
         self.pass_iframe.handle_osc_message(msg) ||
         //self.playhead.handle_osc_message(msg) ||
@@ -108,7 +119,8 @@ impl State {
         self.auto_skip.handle_osc_message(msg) ||
         self.drop_frames.handle_osc_message(msg) ||
         self.loop_to_beat.handle_osc_message(msg) ||
-        self.fps.handle_osc_message(msg)
+        self.fps.handle_osc_message(msg) ||
+        self.auto_switch_n.handle_osc_message(msg)
     }
 }
 
@@ -120,7 +132,6 @@ struct StreamingParams {
     skip_frames: Option<usize>,
     client_addr: Option<SocketAddr>,
     
-    auto_switch_n: usize,
     use_external_beat: OscVar<bool>,
     beat_offset: OscVar<Duration>,
     beat_divider: u32,
@@ -138,7 +149,6 @@ impl Default for StreamingParams {
             restart_loop: false,
             skip_frames: None,
             client_addr: None,
-            auto_switch_n: 0,
             use_external_beat: OscVar::new("/use_external_beat", false),
             beat_offset: OscVar::new("/beat_offset", Duration::from_millis(0)),
             beat_divider: 1,
@@ -261,7 +271,7 @@ fn main() -> std::io::Result<()> {
         File::open(path)?;
     }
 
-    let base_url = PathBuf::from("http://127.0.0.1:3000/");
+    let base_url = PathBuf::from("http://mrorange.rudi8.net:3000/");
     let thumbnail_urls : Vec<String> = relative_paths.iter().map(|p| {
          append_extension(&base_url.join(p), "png").to_str().unwrap().to_string()
     }).collect();
@@ -374,16 +384,13 @@ fn main() -> std::io::Result<()> {
 
     let beat_predictor = BeatPredictor::new();
     let beat_predictor = Arc::new(Mutex::new(beat_predictor));
-    let switch_history: VecDeque<usize> = VecDeque::with_capacity(5);
-    let switch_history = Arc::new(Mutex::new(switch_history));
     thread::spawn({
         let send_sock = Arc::clone(&send_sock);
         let streaming_params = streaming_params.clone();
         let fps_controller = loop_controller.clone();
         let beat_predictor = beat_predictor.clone();
-        let switch_history = switch_history.clone();
         move || {
-        beat_thread(beat_predictor, switch_history, send_sock, &addr, streaming_params, fps_controller);
+        beat_thread(beat_predictor, send_sock, &addr, streaming_params, fps_controller);
     }});
 
     thread::spawn({
@@ -391,10 +398,9 @@ fn main() -> std::io::Result<()> {
         let streaming_params = streaming_params.clone();
         let fps_controller = loop_controller.clone();
         let beat_predictor = beat_predictor.clone();
-        let switch_history = switch_history.clone();
         let external_beat_divider = opt.external_beat_divider;
         move || {
-        osc_listener(beat_predictor, external_beat_divider, switch_history, send_sock, &addr, streaming_params, fps_controller);
+        osc_listener(beat_predictor, external_beat_divider, send_sock, &addr, streaming_params, fps_controller);
     }});
 
     loop {
@@ -468,12 +474,6 @@ fn video_name_sender(send_sock: Arc<Mutex<UdpSocket>>, streaming_params: Arc<Mut
     loop {
         let params = streaming_params.lock().unwrap().clone();
         if let Some(client_addr) = params.client_addr {
-            let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
-                addr: "/auto_switch".to_string(),
-                args: (params.auto_switch_n as i32).to_args(),
-            })).unwrap();
-            send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
-
             // Send video labels
             let mut last_dir = None;
             let mut color_idx = 0;
@@ -516,7 +516,7 @@ fn video_name_sender(send_sock: Arc<Mutex<UdpSocket>>, streaming_params: Arc<Mut
 
 }
 
-fn beat_thread(beat_predictor: Arc<Mutex<BeatPredictor>>, switch_history: Arc<Mutex<VecDeque<usize>>>, send_sock: Arc<Mutex<UdpSocket>>, addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>, mut fps_controller: LoopController) {
+fn beat_thread(beat_predictor: Arc<Mutex<BeatPredictor>>, send_sock: Arc<Mutex<UdpSocket>>, addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>, mut fps_controller: LoopController) {
     let mut auto_switch_num = 0;
     let mut beat_num = 0;
 
@@ -552,10 +552,10 @@ fn beat_thread(beat_predictor: Arc<Mutex<BeatPredictor>>, switch_history: Arc<Mu
                         fps_controller.wake_up_now();
                     }
 
-                    if params.auto_switch_n > 0 {
-                        let switch_history = switch_history.lock().unwrap();
+                    if *params.active_state().auto_switch_n > 0 {
+                        let switch_history = params.active_state().switch_history.clone();
                         auto_switch_num += 1;
-                        if auto_switch_num >= switch_history.len() || auto_switch_num > params.auto_switch_n {
+                        if auto_switch_num >= switch_history.len() || auto_switch_num > *params.active_state().auto_switch_n as usize {
                             auto_switch_num = 0;
                         }
                         if switch_history.len() > 0 {
@@ -576,7 +576,7 @@ fn beat_thread(beat_predictor: Arc<Mutex<BeatPredictor>>, switch_history: Arc<Mu
     }
 }
 
-fn osc_listener(beat_predictor: Arc<Mutex<BeatPredictor>>, external_beat_divider: u32, switch_history: Arc<Mutex<VecDeque<usize>>>, send_sock: Arc<Mutex<UdpSocket>>, addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>, mut fps_controller: LoopController) {
+fn osc_listener(beat_predictor: Arc<Mutex<BeatPredictor>>, external_beat_divider: u32, send_sock: Arc<Mutex<UdpSocket>>, addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>, mut fps_controller: LoopController) {
     let sock = UdpSocket::bind(addr).unwrap();
     eprintln!("OSC: Listening to {}", addr);
 
@@ -584,7 +584,7 @@ fn osc_listener(beat_predictor: Arc<Mutex<BeatPredictor>>, external_beat_divider
 
     let mut beat_i = 0;
 
-    let mut parse_message = |msg: &OscMessage, params: &mut StreamingParams, client_addr: SocketAddr, switch_history: &mut VecDeque<usize>| -> Result<(), ()> {
+    let mut parse_message = |msg: &OscMessage, params: &mut StreamingParams, client_addr: SocketAddr| -> Result<(), ()> {
         if params.handle_osc_message(&msg) {}
         else {
             match msg.addr.as_str() {
@@ -620,13 +620,6 @@ fn osc_listener(beat_predictor: Arc<Mutex<BeatPredictor>>, external_beat_divider
                 "/video_num" => {
                     params.edit_state_mut().video_num.set(msg.args[0].clone().int().ok_or(())?);
                     fps_controller.wake_up_now();
-                    if switch_history.len() == 5 {
-                        switch_history.pop_back();
-                    }
-                    switch_history.push_front(*params.edit_state().video_num as usize);
-                },
-                "/auto_switch" => {
-                    params.auto_switch_n = msg.args[0].clone().int().ok_or(())? as usize;
                 },
                 "/manual_beat" => {
                     if !*params.use_external_beat {
@@ -691,10 +684,9 @@ fn osc_listener(beat_predictor: Arc<Mutex<BeatPredictor>>, external_beat_divider
             Ok((size, client_addr)) => {
                 let packet = rosc::decoder::decode(&buf[..size]).unwrap();
                 let mut params = streaming_params.lock().unwrap();
-                let mut switch_history = switch_history.lock().unwrap();
                 let parse_result = match packet {
                     OscPacket::Message(ref msg) => {
-                        parse_message(&msg, &mut params, client_addr, &mut switch_history)
+                        parse_message(&msg, &mut params, client_addr)
                     }
                     OscPacket::Bundle(_) => {
                         eprintln!("Received bundle but they are currently not handled");
