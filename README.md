@@ -30,25 +30,15 @@ Potentially interesting parameters:
 
 ## Run glitcher
 ```
-cargo run --release -- -i videos/* |  mpv --no-correct-pts --fps=1000 --no-cache -
+cargo run --release -- --input-dir videos/ |  mpv --no-correct-pts --fps=1000 --no-cache -
 ```
+We had reports of crashing AMD GPUs when using hardware decoding. If you are experiencing problems add `--hwdec=no` to your `mpv` command.  
 
 By default the glitcher listens on port 8000 for OSC messages.
 
 ## OSC messages
 
-- `/fps <float>` Set frames per second.
-- `/record_loop <bool>` Loop recording start when true is sent and stops when false is sent. After recording the loop immediately starts playing.
-- `/play_loop <bool>`  Play previously recorded loop.
-- `/pass_iframe <bool>` Lets I-frames through, disabling the glitch effect.
-- `/video_num <int>` Loads the n-th video in the list of videos given to `--input`.
+We are constantly experimenting with different commands and features ;).
+Please refer to the `State::default` struct initialization in `src/bin/h264_glitcher.rs` as well as the `osc_listener` function for the list of currently implemeted OSC commands.
 
-## Ideas
-
-- Fluid speed control, turntable style
-- Video selection UI with thumbnails, groups of videos
-- Recurse directories as input
-
-### Todos
-
-- Find out why video sometimes stutters when switching
+You can also use our pre-made [OpenStageControl session](open_stage_control/h264_glitcher_Session.json).
