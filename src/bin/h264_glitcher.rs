@@ -30,9 +30,9 @@ struct Opt {
     #[structopt(short, long, parse(from_os_str), required=true, help="Input video directory. Expects a subdirectory \"encoded\" with the raw h264 streams and a subdirectory \"thumbnails\" with a thumbnail for each stream.")]
     input_dir: PathBuf,
 
-    #[structopt(short = "l", long, default_value = "[::1]:8000", help="OSC listen address")]
+    #[structopt(short = "l", long, default_value = "127.0.0.1:8000", help="OSC listen address")]
     listen_addr: String,
-    #[structopt(short = "s", long, default_value = "[::]:0", help="OSC send address (port = 0 -> choose port automatically)")]
+    #[structopt(short = "s", long, default_value = "0.0.0.0:0", help="OSC send address (port = 0 -> choose port automatically)")]
     send_addr: String,
 
     #[structopt(long, help="Do not rewrite frame_num fields for potentially smoother playback")]
@@ -44,7 +44,7 @@ struct Opt {
     #[structopt(long, default_value = "http://[::1]:3000/", help="Thumbnail server base url")]
     thumbnail_server_base_url: String,
 
-    #[structopt(short = "l", long, default_value = "[::]:3000", help="OSC listen address")]
+    #[structopt(short = "l", long, default_value = "[::]:3000", help="Thumbnail server listen address")]
     thumbnail_server_listen_addr: String,
 }
 
