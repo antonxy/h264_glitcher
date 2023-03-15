@@ -256,13 +256,15 @@ fn main() -> std::io::Result<()> {
 
     let encoded_path = opt.input_dir.join("encoded");
     let thumbnail_path = opt.input_dir.join("thumbnails");
-    let relative_paths : Vec<PathBuf> = WalkDir::new(&encoded_path)
+    let mut relative_paths : Vec<PathBuf> = WalkDir::new(&encoded_path)
         .into_iter()
         .filter_map(|e| e.ok())
         .map(|p| p.into_path())
         .filter(|p| p.extension().unwrap_or(std::ffi::OsStr::new("")) == "h264")
         .map(|p| p.strip_prefix(&encoded_path).unwrap().with_extension("").to_path_buf())
         .collect();
+
+    relative_paths.sort();
 
     let paths : Vec<PathBuf> = relative_paths.iter().map(|p| append_extension(&encoded_path.join(p), "h264")).collect();
 
