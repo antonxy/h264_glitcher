@@ -35,8 +35,8 @@ struct Opt {
     #[structopt(short = "s", long, default_value = "0.0.0.0:0", help="OSC send address")]
     send_addr: String,
 
-    #[structopt(long, help="Rewrite frame_num fields for potentially smoother playback")]
-    rewrite_frame_nums: bool,
+    #[structopt(long, help="Do not rewrite frame_num fields for potentially smoother playback")]
+    no_rewrite_frame_nums: bool,
 
     #[structopt(long, default_value = "1", help="Slow down input beat")]
     external_beat_divider: u32,
@@ -324,7 +324,7 @@ fn main() -> std::io::Result<()> {
 
 
     let mut last_frame_num = 0;
-    let rewrite_frame_nums = opt.rewrite_frame_nums;
+    let rewrite_frame_nums = !opt.no_rewrite_frame_nums;
     let mut write_frame = move |nal_unit: &NalUnit| -> std::io::Result<()> {
         let mut nal_unit = nal_unit.clone();
         let has_frame_num = match nal_unit.nal_unit_type {
