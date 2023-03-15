@@ -40,6 +40,8 @@ struct Opt {
 
     #[structopt(long, default_value = "1", help="Slow down input beat")]
     external_beat_divider: u32,
+    #[structopt(short = "l", long, default_value = "[::]:3000", help="OSC listen address")]
+    thumbnail_server_listen_addr: String,
 }
 
 
@@ -278,11 +280,12 @@ fn main() -> std::io::Result<()> {
          append_extension(&base_url.join(p), "png").to_str().unwrap().to_string()
     }).collect();
 
-    thread::spawn(
+    thread::spawn({
+        let listen_addr = opt.thumbnail_server_listen_addr.clone();
         move || {
-            h264_glitcher::thumbnail_server::serve(&thumbnail_path);
+            h264_glitcher::thumbnail_server::serve(&thumbnail_path, &listen_addr);
         }
-    );
+    });
 
 
     let streaming_params = Arc::new(Mutex::new(StreamingParams::default()));
