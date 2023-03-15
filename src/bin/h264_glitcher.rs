@@ -25,14 +25,14 @@ use walkdir::WalkDir;
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "h264_glitcher", about = "Live controllable h264 glitcher.",
-            long_about = "Pipe output into mpv.")]
+            long_about = "Pipe output into mpv (or any other capable player).")]
 struct Opt {
     #[structopt(short, long, parse(from_os_str), required=true, help="Input video directory. Expects a subdirectory \"encoded\" with the raw h264 streams and a subdirectory \"thumbnails\" with a thumbnail for each stream.")]
     input_dir: PathBuf,
 
-    #[structopt(short = "l", long, default_value = "0.0.0.0:8000", help="OSC listen address")]
+    #[structopt(short = "l", long, default_value = "[::1]:8000", help="OSC listen address")]
     listen_addr: String,
-    #[structopt(short = "s", long, default_value = "0.0.0.0:0", help="OSC send address")]
+    #[structopt(short = "s", long, default_value = "[::]:0", help="OSC send address (port = 0 -> choose port automatically)")]
     send_addr: String,
 
     #[structopt(long, help="Do not rewrite frame_num fields for potentially smoother playback")]
