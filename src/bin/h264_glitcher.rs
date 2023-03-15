@@ -11,6 +11,7 @@ use std::io::{Read, Write};
 use std::ops::{Add, Deref};
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::rc::Rc;
 use std::sync::mpsc::{SyncSender, TrySendError};
 use std::time::{Duration, Instant};
 use std::vec::Vec;
@@ -37,6 +38,9 @@ struct Opt {
 
     #[structopt(long, help="Do not rewrite frame_num fields for potentially smoother playback")]
     no_rewrite_frame_nums: bool,
+
+    #[structopt(long, help="Load and parse all videos into memory")]
+    prefetch: bool,
 
     #[structopt(long, default_value = "1", help="Slow down input beat")]
     external_beat_divider: u32,
@@ -224,6 +228,7 @@ struct Video {
     loadedVideo : Option<Arc<Mutex<LoadedVideo>>>,
 }
 
+#[derive(Clone)]
 struct LoadedVideo {
     frames: Vec<NalUnit>,
 }
@@ -273,6 +278,11 @@ fn main() -> std::io::Result<()> {
     relative_paths.sort();
 
     let paths : Vec<PathBuf> = relative_paths.iter().map(|p| append_extension(&encoded_path.join(p), "h264")).collect();
+
+    let mut loaded_videos : Vec<Rc<LoadedVideo>> = Vec::new();
+    if opt.prefetch {
+        loaded_videos = paths.iter().map(|p| Rc::new(LoadedVideo::load(p).unwrap())).collect();
+    }
 
     // Check if all video files can be opened
     for path in &paths {
@@ -351,7 +361,7 @@ fn main() -> std::io::Result<()> {
     };
 
     let mut current_video_num: usize = 0;
-    let mut current_video: LoadedVideo = LoadedVideo::load(&paths[0])?;
+    let mut current_video: Rc<LoadedVideo> = Rc::new(LoadedVideo::load(&paths[0])?);
     let mut current_frame: usize = 0;
 
     let advance_frame = |current_frame: &mut usize, total_frames: usize| {
@@ -422,7 +432,12 @@ fn main() -> std::io::Result<()> {
         // Switch video if requested
         if current_video_num as i32 != *state.video_num && *state.video_num < paths.len() as i32 {
             current_video_num = *state.video_num as usize;
-            current_video = LoadedVideo::load(&paths[current_video_num])?;
+            current_video = 
+                if opt.prefetch {
+                    loaded_videos[current_video_num].clone() //TODO reference
+                } else {
+                    Rc::new(LoadedVideo::load(&paths[current_video_num])?)
+                };
             current_frame = 0;
         }
 
