@@ -40,6 +40,10 @@ struct Opt {
 
     #[structopt(long, default_value = "1", help="Slow down input beat")]
     external_beat_divider: u32,
+
+    #[structopt(long, default_value = "http://[::1]:3000/", help="Thumbnail server base url")]
+    thumbnail_server_base_url: String,
+
     #[structopt(short = "l", long, default_value = "[::]:3000", help="OSC listen address")]
     thumbnail_server_listen_addr: String,
 }
@@ -275,7 +279,7 @@ fn main() -> std::io::Result<()> {
         File::open(path)?;
     }
 
-    let base_url = PathBuf::from("http://mrorange.rudi8.net:3000/");
+    let base_url = PathBuf::from(&opt.thumbnail_server_base_url);
     let thumbnail_urls : Vec<String> = relative_paths.iter().map(|p| {
          append_extension(&base_url.join(p), "png").to_str().unwrap().to_string()
     }).collect();
