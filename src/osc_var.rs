@@ -5,8 +5,13 @@ use rosc::{encoder, OscPacket, OscMessage, OscType};
 #[derive(Clone)]
 pub struct OscVar<T> {
     pub value: T,
+
+    // Whether the var was changed and the new value should be sent on OSC
     pub changed_outgoing: bool,
+
+    // Whether the var was changed and the new value has to be handled still
     pub changed_incoming: bool,
+
     pub address: String,
 }
 
@@ -38,14 +43,11 @@ impl<T : PartialEq + OscValue + Copy + OscValue<Target = T>> OscVar<T> {
 
     pub fn set_changed(&mut self) {
         self.changed_outgoing = true;
+        self.changed_incoming = true;
     }
 
     pub fn set_handled(&mut self) {
         self.changed_incoming = false;
-    }
-
-    pub fn changed(&self) -> bool {
-        self.changed_incoming || self.changed_outgoing
     }
 
     pub fn send(&mut self, socket: &UdpSocket, client_addr: &SocketAddr) {

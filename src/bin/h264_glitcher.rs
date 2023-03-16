@@ -656,6 +656,7 @@ fn osc_listener(beat_predictor: Arc<Mutex<BeatPredictor>>, external_beat_divider
                 },
                 "/reset" => {
                     *params.edit_state_mut() = State::default();
+                    params.edit_state_mut().set_changed();
                 },
                 "/copy_active" => {
                     if *params.active_slot == *params.edit_slot {
@@ -671,19 +672,21 @@ fn osc_listener(beat_predictor: Arc<Mutex<BeatPredictor>>, external_beat_divider
                 }
             }
         }
-        if params.active_state().fps.changed() {
+        if params.active_state().fps.changed_incoming {
             fps_controller.set_fps(*params.active_state().fps);
             params.active_state_mut().fps.set_handled();
         }
-        if params.active_state().beat_multiplier.changed() {
+        if params.active_state().beat_multiplier.changed_incoming {
             beat_predictor.lock().unwrap().multiplier = 0.5_f32.powi(*params.active_state().beat_multiplier);
             params.active_state_mut().beat_multiplier.set_handled();
         }
-        if params.active_slot.changed() {
+        if params.active_slot.changed_incoming {
             params.set_active_slot(*params.active_slot);
+            params.active_slot.set_handled()
         }
-        if params.edit_slot.changed() {
+        if params.edit_slot.changed_incoming {
             params.set_edit_slot(*params.edit_slot);
+            params.edit_slot.set_handled()
         }
         Ok(())
     };
