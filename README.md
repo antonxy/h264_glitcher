@@ -7,8 +7,58 @@ Can be controlled via OSC.
 
 https://user-images.githubusercontent.com/4194320/148616193-57d7ca6b-afb8-4751-b33e-0c5017b6872c.mp4
 
+## Using the Glitcher
+### Prepare Videos
 
-## Prepare Videos
+Videos have to be in a folder with the following structure:
+```
+videos/
+    original/  # Used by the doit script
+        video1.mp4
+    encoded/
+        video1.h264
+    thumbnails/
+        video1.png
+```
+
+You can copy the the [doit](https://pydoit.org/) script in `scripts/dodo.py` to your videos folder and use it to encode all videos in the `original` folder. Doit stores hashes of files it already processed so it will only encode new or changed videos again.
+
+```
+pip install doit
+cp scripts/dodo.py videos/
+cd videos
+doit
+```
+
+### Run glitcher
+```
+cargo run --release -- --input-dir videos/ |  mpv --no-correct-pts --fps=1000 --no-cache -
+```
+We had reports of crashing AMD GPUs when using hardware decoding. If you are experiencing problems add `--hwdec=no` to your `mpv` command.  
+
+Use the `--prefetch` option to load all videos into RAM. Takes longer to start, but makes video switching much smoother.
+
+By default the glitcher listens on port 8000 for OSC messages.
+
+### Control using OpenStageControl
+
+Install [OpenStageControl](https://openstagecontrol.ammd.net/).
+
+You can load our pre-made [OpenStageControl session](open_stage_control/h264_glitcher_Session.json).
+
+Example network config for a tablet controlling the glitcher running on a laptop:
+
+![](doc/network.svg)
+
+## Technical info
+### OSC messages
+
+Instead of using our pre-made [OpenStageControl session](open_stage_control/h264_glitcher_Session.json) you can also send OSC commands yourself.
+
+We are constantly experimenting with different commands and features ;).
+Please refer to the `State::default` struct initialization in `src/bin/h264_glitcher.rs` as well as the `osc_listener` function for the list of currently implemeted OSC commands.
+
+### Video Encoding
 
 Use ffmpeg to convert the videos to a raw h264 stream
 ```
@@ -28,17 +78,6 @@ Potentially interesting parameters:
 - `refs=1` allow max 1 reference frames for p-frames
 - `g=9999999` No keyframes inbetween
 
-## Run glitcher
-```
-cargo run --release -- --input-dir videos/ |  mpv --no-correct-pts --fps=1000 --no-cache -
-```
-We had reports of crashing AMD GPUs when using hardware decoding. If you are experiencing problems add `--hwdec=no` to your `mpv` command.  
+Maybe also useful: https://encodingwissen.de/codecs/x264/referenz/
 
-By default the glitcher listens on port 8000 for OSC messages.
-
-## OSC messages
-
-We are constantly experimenting with different commands and features ;).
-Please refer to the `State::default` struct initialization in `src/bin/h264_glitcher.rs` as well as the `osc_listener` function for the list of currently implemeted OSC commands.
-
-You can also use our pre-made [OpenStageControl session](open_stage_control/h264_glitcher_Session.json).
+potentially interesting x264 options: `partitions, tune=zerolatency`
