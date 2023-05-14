@@ -134,6 +134,12 @@ impl State {
     }
 }
 
+#[derive(Clone, Debug)]
+struct ShortLoop {
+    first_frame: Option<usize>,
+    len: usize,
+}
+
 
 #[derive(Clone)]
 struct StreamingParams {
@@ -141,7 +147,9 @@ struct StreamingParams {
 
     skip_frames: Option<usize>,
     client_addr: Option<SocketAddr>,
-    
+
+    short_loop: Option<ShortLoop>,
+
     use_external_beat: OscVar<bool>,
     beat_offset: OscVar<Duration>,
     beat_divider: u32,
@@ -159,6 +167,7 @@ impl Default for StreamingParams {
             restart_loop: false,
             skip_frames: None,
             client_addr: None,
+            short_loop: None,
             use_external_beat: OscVar::new("/use_external_beat", false),
             beat_offset: OscVar::new("/beat_offset", Duration::from_millis(0)),
             beat_divider: 1,
@@ -200,7 +209,7 @@ impl StreamingParams {
     fn edit_state(&self) -> &State {
         &self.state_slots[*self.edit_slot]
     }
-    
+
     fn edit_state_mut(&mut self) -> &mut State {
         &mut self.state_slots[*self.edit_slot]
     }
@@ -368,7 +377,19 @@ fn main() -> std::io::Result<()> {
         let (mut from_incl, mut to_excl) = (0, total_frames);
 
         //TODO don't lock every fucking time
-        if let Some((loop_from, loop_to)) = streaming_params.lock().unwrap().active_state().loop_range.0 {
+        let mut params = streaming_params.lock().unwrap();
+
+        if let Some(short_loop) = &mut params.short_loop {
+            if short_loop.first_frame.is_none() {
+                short_loop.first_frame = Some(*current_frame);
+            }
+
+            let loop_from = short_loop.first_frame.unwrap();
+            let loop_to = short_loop.first_frame.unwrap() + short_loop.len;
+
+            from_incl = usize::min(loop_from, total_frames - 2);
+            to_excl = usize::min(usize::max(from_incl + 1, loop_to), total_frames);
+        } else if let Some((loop_from, loop_to)) = params.active_state().loop_range.0 {
             let loop_from = (total_frames as f32 * loop_from) as usize;
             let loop_to = (total_frames as f32 * loop_to) as usize;
 
@@ -449,7 +470,7 @@ fn main() -> std::io::Result<()> {
         // Now the state based stuff
 
 
-        
+
         // Play from file
         if *state.drop_frames {
             advance_frame(&mut current_frame, current_video.frames.len());
@@ -465,7 +486,7 @@ fn main() -> std::io::Result<()> {
         // Restart video if at end
         advance_frame(&mut current_frame, current_video.frames.len());
         let mut nal_unit = &current_video.frames[current_frame];
-        
+
         // If pass_iframe is not activated, send only CodedSliceNonIdr
         // Sending a new SPS without an Idr Slice seems to cause problems when switching between some videos
         if nal_unit.nal_unit_type == NALUnitType::CodedSliceNonIdr || *state.pass_iframe {
@@ -645,6 +666,17 @@ fn osc_listener(beat_predictor: Arc<Mutex<BeatPredictor>>, external_beat_divider
                     params.edit_state_mut().video_num.set(msg.args[0].clone().int().ok_or(())?);
                     fps_controller.wake_up_now();
                 },
+                "/short_loop" => {
+                    let loop_len = msg.args[0].clone().int().ok_or(())?;
+                    if loop_len > 0 {
+                        params.short_loop = Some(ShortLoop {
+                            first_frame: None,
+                            len: loop_len as usize,
+                        })
+                    } else {
+                        params.short_loop = None;
+                    }
+                }
                 "/manual_beat" => {
                     if !*params.use_external_beat {
                         beat_predictor.lock().unwrap().put_input_beat();
