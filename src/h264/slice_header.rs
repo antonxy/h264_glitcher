@@ -9,12 +9,14 @@ use bitstream_io::{BigEndian, BitWriter, BitWrite, BitReader, BitRead};
 
 #[derive(Clone, Debug)]
 pub struct SliceHeader {
+    // Section 7.3.3
+
     pub first_mb_in_slice : u32,
     pub slice_type : u32,
     pub pic_parameter_set_id : u32,
     pub frame_num : u32,
 
-    data: Vec<u8>,
+    pub data: Vec<u8>,
     data_offset: u64,
 }
 

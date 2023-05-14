@@ -22,6 +22,7 @@ use std::sync::{Mutex, Arc};
 use std::net::{SocketAddr, UdpSocket};
 use rosc::{OscPacket, OscMessage, encoder, OscType};
 use walkdir::WalkDir;
+use rand::Rng;
 
 
 #[derive(Debug, StructOpt)]
@@ -68,6 +69,7 @@ struct State {
     fps: OscVar<f32>,
     auto_switch_n: OscVar<i32>,
     switch_history: VecDeque<usize>,
+    byte_errors: OscVar<f32>,
 }
 
 impl Default for State {
@@ -84,6 +86,7 @@ impl Default for State {
             fps: OscVar::new("/fps", 30.0),
             auto_switch_n: OscVar::new("/auto_switch", 0),
             switch_history: VecDeque::with_capacity(5),
+            byte_errors: OscVar::new("/byte_errors", 0.0),
         }
     }
 }
@@ -100,6 +103,7 @@ impl State {
         self.loop_to_beat.send_if_changed(socket, client_addr);
         self.fps.send_if_changed(socket, client_addr);
         self.auto_switch_n.send_if_changed(socket, client_addr);
+        self.byte_errors.send_if_changed(socket, client_addr);
     }
 
     fn set_changed(&mut self) {
@@ -113,6 +117,7 @@ impl State {
         self.loop_to_beat.set_changed();
         self.fps.set_changed();
         self.auto_switch_n.set_changed();
+        self.byte_errors.set_changed();
     }
 
     fn handle_osc_message(&mut self, msg: &OscMessage) -> bool {
@@ -130,7 +135,8 @@ impl State {
         self.drop_frames.handle_osc_message(msg) ||
         self.loop_to_beat.handle_osc_message(msg) ||
         self.fps.handle_osc_message(msg) ||
-        self.auto_switch_n.handle_osc_message(msg)
+        self.auto_switch_n.handle_osc_message(msg) ||
+        self.byte_errors.handle_osc_message(msg)
     }
 }
 
@@ -342,24 +348,48 @@ fn main() -> std::io::Result<()> {
     handle.write_all(&[0x00, 0x00, 0x00, 0x01])?;
 
 
+
+    let mut rng = rand::thread_rng();
     let mut last_frame_num = 0;
     let rewrite_frame_nums = !opt.no_rewrite_frame_nums;
-    let mut write_frame = move |nal_unit: &NalUnit| -> std::io::Result<()> {
+    let mut write_frame = move |nal_unit: &NalUnit, byte_errors: f32| -> std::io::Result<()> {
         let mut nal_unit = nal_unit.clone();
         let has_frame_num = match nal_unit.nal_unit_type {
             NALUnitType::CodedSliceIdr | NALUnitType::CodedSliceNonIdr => { true },
             _ => { false },
         };
-        if rewrite_frame_nums && has_frame_num {
+        if (rewrite_frame_nums || byte_errors > 0.0) && has_frame_num {
             let mut header = SliceHeader::from_bytes(&nal_unit.rbsp).unwrap();
             // Just setting all frame nums to zero also seems to work.
             // Maybe mpv even crashes a bit less with just zero
             // I haven't observed a crash for a while though, maybe it was something else also
             //header.frame_num = 0;
 
-            header.frame_num = last_frame_num;
-            last_frame_num += 1;
-            last_frame_num %= 16; //This just assumes frame nums are encoded with 4 bits. That doesn't have to be the case though.
+            if rewrite_frame_nums {
+                header.frame_num = last_frame_num;
+                last_frame_num += 1;
+                last_frame_num %= 16; //This just assumes frame nums are encoded with 4 bits. That doesn't have to be the case though.
+            }
+            if byte_errors > 0.0 {
+                // Introduce random errors. Start some bytes into buffer so that we hopefully only
+                // hit data, not the header
+                let offset = 50;
+                // let offset = 0; // Or maybe thats fun also?
+
+                for b in header.data[offset..].iter_mut() {
+                    if rng.gen::<f32>() < byte_errors {
+                        *b = rng.gen()
+                    }
+                }
+
+                // Reasonable probability of errors seems to be around 0.0001
+                // Weirder behaviour at higher error probabilities:
+                // Why does the motion always go down ?
+                // Why is the playhead not smooth anymore?
+                // Does mpv hang and slow down the glitcher also (pipe gets full)?
+                // Probably have to parse further down and destroy more controlled regions
+                // Would be cool to destroy whole blocks, would look more glitchy maybe
+            }
             nal_unit.rbsp = header.to_bytes();
 
         }
@@ -415,7 +445,7 @@ fn main() -> std::io::Result<()> {
     loop {
         let nal_unit = &current_video.frames[current_frame];
         advance_frame(&mut current_frame, current_video.frames.len());
-        write_frame(&nal_unit)?;
+        write_frame(&nal_unit, 0.0)?;
         if nal_unit.nal_unit_type == NALUnitType::CodedSliceIdr {
             eprintln!("Got first I frame");
             break;
@@ -490,7 +520,7 @@ fn main() -> std::io::Result<()> {
         // If pass_iframe is not activated, send only CodedSliceNonIdr
         // Sending a new SPS without an Idr Slice seems to cause problems when switching between some videos
         if nal_unit.nal_unit_type == NALUnitType::CodedSliceNonIdr || *state.pass_iframe {
-            write_frame(&nal_unit)?;
+            write_frame(&nal_unit, *state.byte_errors)?;
             let is_picture_data = nal_unit.nal_unit_type.is_picture_data();
             if !is_picture_data {
                 continue; //Only sleep if the nal_unit is a video frame
