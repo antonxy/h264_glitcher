@@ -30,6 +30,9 @@ fn main() -> std::io::Result<()> {
 
     let it = it.take(opt.limit.unwrap_or(usize::MAX));
 
+    let mut current_sps = None;
+    let mut current_pps = None;
+
     for nal_unit in it {
         match nal_unit {
             Err(e) => println!("Failed to parse NAL: {:?}", e),
@@ -41,7 +44,10 @@ fn main() -> std::io::Result<()> {
                         println!("{:?}", nal_unit.rbsp);
                         match sps {
                             Err(e) => println!("Failed to parse SPS: {:?}", e),
-                            Ok(sps) => println!("{:?}", sps)
+                            Ok(sps) => {
+                                println!("{:?}", sps);
+                                current_sps = Some(sps);
+                            }
                         }
                     }
                     NALUnitType::Pps => {
@@ -49,20 +55,23 @@ fn main() -> std::io::Result<()> {
                         println!("{:?}", nal_unit.rbsp);
                         match pps {
                             Err(e) => println!("Failed to parse SPS: {:?}", e),
-                            Ok(sps) => println!("{:?}", sps)
+                            Ok(pps) => {
+                                println!("{:?}", pps);
+                                current_pps = Some(pps);
+                            }
                         }
                     }
                     NALUnitType::CodedSliceIdr | NALUnitType::CodedSliceNonIdr => {
-                        let header = SliceHeader::from_bytes(&nal_unit.rbsp);
+                        let header = SliceHeader::from_bytes(&nal_unit.rbsp, current_sps.as_ref().unwrap(), current_pps.as_ref().unwrap(), &nal_unit.nal_unit_type, nal_unit.nal_ref_idc);
                         match header {
                             Err(e) => println!("Failed to parse slice header: {:?}", e),
                             Ok(header) => println!("{}", header)
-                        }        
+                        }
                     },
                     _ => {},
                 }
             }
-            
+
         }
         println!("------");
     }

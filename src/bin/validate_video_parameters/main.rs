@@ -34,7 +34,7 @@ struct Opt {
     diff: bool,
 }
 
-fn check_for_assumptions(sps: &Sps) {
+fn check_for_assumptions_sps(sps: &Sps) {
     if sps.separate_colour_plane_flag {
         println!(
             "{}",
@@ -47,6 +47,9 @@ fn check_for_assumptions(sps: &Sps) {
             "log2_max_frame_num_minus4 is != 0. We are assuming it is 0.".red()
         );
     }
+}
+
+fn check_for_assumptions_pps(pps: &Pps) {
 }
 
 fn main() -> std::io::Result<()> {
@@ -81,7 +84,7 @@ fn main() -> std::io::Result<()> {
                             if opt.diff {
                                 println!("{:#?}", sps);
                             }
-                            check_for_assumptions(&sps);
+                            check_for_assumptions_sps(&sps);
                             reference_sps = Some(sps);
                         }
                     }
@@ -100,6 +103,7 @@ fn main() -> std::io::Result<()> {
                             if opt.diff {
                                 println!("{:#?}", pps);
                             }
+                            check_for_assumptions_pps(&pps);
                             reference_pps = Some(pps);
                         }
                     }
@@ -143,7 +147,7 @@ fn main() -> std::io::Result<()> {
                                 } else {
                                     println!("Video file {:?}: {}", path, "Same SPS".green());
                                 }
-                                check_for_assumptions(&sps);
+                                check_for_assumptions_sps(&sps);
                             }
                         }
                     }
@@ -165,6 +169,7 @@ fn main() -> std::io::Result<()> {
                                 } else {
                                     println!("Video file {:?}: {}", path, "Same PPS".green());
                                 }
+                                check_for_assumptions_pps(&pps);
                             }
                         }
                     }

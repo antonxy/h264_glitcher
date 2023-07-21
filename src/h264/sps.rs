@@ -22,7 +22,7 @@ pub struct Sps {
     pub constraint_set4_flag: bool,
     pub constraint_set5_flag: bool,
     pub level_idc: u8,
-    pub seq_parameter_set_id: u8, //can be 0 to 31
+    pub seq_parameter_set_id: u32, //can be 0 to 31
     pub chroma_format_idc: u8,    // 0 to 4, default is 1
     pub separate_colour_plane_flag: bool,
     pub bit_depth_luma_minus8: u8,   // 0 to 6, default is 0
@@ -49,6 +49,13 @@ pub struct Sps {
 }
 
 impl Sps {
+    pub fn chroma_array_type(&self) -> u8 {
+        if !self.separate_colour_plane_flag {
+            self.chroma_format_idc
+        } else {
+            0
+        }
+    }
     pub fn read(reader: &mut impl BitRead) -> Result<Self, ParseError> {
         let profile_idc = reader.read(8)?;
         let constraint_set0_flag = reader.read_bit()?;

@@ -23,6 +23,7 @@ enum_from_primitive! {
         Dps                          = 16,
         CodedSliceAux              = 19,
         CodedSliceSvcExtension    = 20,
+        NAL21 = 21,
     }
 }
 
@@ -31,6 +32,13 @@ impl NALUnitType {
         match self {
             NALUnitType::CodedSliceIdr | NALUnitType::CodedSliceNonIdr => { true },
             _ => { false },
+        }
+    }
+
+    pub fn idr_pic_flag(&self) -> bool {
+        match self {
+            NALUnitType::CodedSliceIdr => true,
+            _ => false,
         }
     }
 }

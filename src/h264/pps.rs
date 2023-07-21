@@ -7,8 +7,8 @@ use visit_diff::Diff;
 
 #[derive(Clone, Debug, Diff, PartialEq)]
 pub struct Pps {
-    pub pic_parameter_set_id: u8,
-    pub seq_parameter_set_id: u8,
+    pub pic_parameter_set_id: u32,
+    pub seq_parameter_set_id: u32,
     pub entropy_coding_mode_flag: bool,
     pub bottom_field_pic_order_in_frame_present_flag: bool,
     //pub slice_groups: Vec<SliceGroup>,
