@@ -9,6 +9,9 @@ ffmpeg = 'ffmpeg'
 threads = '8'
 
 ffmpeg_config = {
+    'preoptions': [
+        '-noautorotate',
+    ],
     'options': [
         '-c:v', 'libx264',
         '-vf', 'format=yuv420p,scale=1920:1080',
@@ -38,7 +41,7 @@ def task_encode():
             'name': encoded_file.name,
             'actions': [
                 dir_creator(encoded_file),
-                [ffmpeg, '-y', '-i', source_file] + ffmpeg_config['options'] + ['-threads', threads, encoded_file]
+                [ffmpeg, '-y'] + ffmpeg_config['preoptions'] + ['-i', source_file] + ffmpeg_config['options'] + ['-threads', threads, encoded_file]
             ],
             'file_dep': [source_file],
             'targets': [encoded_file],
