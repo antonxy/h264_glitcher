@@ -160,6 +160,9 @@ def symlink(content_folder):
         shutil.rmtree(out_dir)
 
     for path in walk(in_dir):
+        if path.with_suffix('').name.endswith('_rem'):
+            print(f"Skipping {path.name}")
+            continue
         sha, folder = sha256sum(path), get_content_folder(path)
         e = get_encoded_path_from_sha(sha, folder)
         t = get_thumbnail_path_from_sha(sha, folder)
