@@ -145,6 +145,16 @@ def encode(paths, skip_if_exists=True):
             continue
         encode_single(path, skip_if_exists)
 
+def is_disabled(path):
+    if path.with_suffix('').name.endswith('_rem'):
+        return True
+    for parent in path.resolve().parents:
+        if parent.with_suffix('').name.endswith('_rem'):
+            return True
+        if (parent / ".content_folder").exists():
+            return False
+    return False
+
 def symlink(content_folder):
     content_folder = content_folder.resolve()
     if not (content_folder / ".content_folder").exists():
@@ -160,8 +170,8 @@ def symlink(content_folder):
         shutil.rmtree(out_dir)
 
     for path in walk(in_dir):
-        if path.with_suffix('').name.endswith('_rem'):
-            print(f"Skipping {path.name}")
+        if is_disabled(path):
+            print(f"Skipping {path}")
             continue
         sha, folder = sha256sum(path), get_content_folder(path)
         e = get_encoded_path_from_sha(sha, folder)
