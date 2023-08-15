@@ -35,7 +35,7 @@ impl LoopTimer {
         self.loop_begin_time = Instant::now();
     }
 
-    pub fn end_loop(&self) {
+    pub fn end_loop(&mut self) {
         let (mutex, cvar) = &*self.state;
         let loop_time_left = |state: &SharedState| {
             let loop_end_time = Instant::now();
@@ -57,9 +57,10 @@ impl LoopTimer {
                 None => break,
             };
             guard = cvar.wait_timeout(guard, timeout).unwrap().0;
-            
+
         }
         guard.wake_up = false;
+        self.loop_begin_time = Instant::now();
     }
 
 }

@@ -2,6 +2,7 @@ use h264_glitcher::h264::*;
 use h264_glitcher::beat_predictor::BeatPredictor;
 use h264_glitcher::fps_loop::{LoopTimer, LoopController};
 use h264_glitcher::osc_var::{OscVar, LoopRange, OscValue};
+use h264_glitcher::sigma_delta::SigmaDelta;
 
 extern crate structopt;
 
@@ -64,7 +65,7 @@ struct State {
     playhead: OscVar<f32>,
     loop_range: OscVar<LoopRange>,
     auto_skip: OscVar<bool>,
-    drop_frames: OscVar<bool>,
+    frame_repeat: OscVar<f32>, // Values < 1 drop frames, non integer values drop / repeat frames sometimes
     loop_to_beat: OscVar<bool>,
     fps: OscVar<f32>,
     auto_switch_n: OscVar<i32>,
@@ -81,7 +82,7 @@ impl Default for State {
             playhead: OscVar::new("/playhead", 0.0),
             loop_range: OscVar::new("/loop_range", LoopRange(None)),
             auto_skip: OscVar::new("/auto_skip", false),
-            drop_frames: OscVar::new("/drop_frames", false),
+            frame_repeat: OscVar::new("/frame_repeat", 1.0),
             loop_to_beat: OscVar::new("/loop_to_beat", false),
             fps: OscVar::new("/fps", 30.0),
             auto_switch_n: OscVar::new("/auto_switch", 0),
@@ -99,7 +100,7 @@ impl State {
         self.playhead.send_if_changed(socket, client_addr);
         self.loop_range.send_if_changed(socket, client_addr);
         self.auto_skip.send_if_changed(socket, client_addr);
-        self.drop_frames.send_if_changed(socket, client_addr);
+        self.frame_repeat.send_if_changed(socket, client_addr);
         self.loop_to_beat.send_if_changed(socket, client_addr);
         self.fps.send_if_changed(socket, client_addr);
         self.auto_switch_n.send_if_changed(socket, client_addr);
@@ -113,7 +114,7 @@ impl State {
         self.playhead.set_changed();
         self.loop_range.set_changed();
         self.auto_skip.set_changed();
-        self.drop_frames.set_changed();
+        self.frame_repeat.set_changed();
         self.loop_to_beat.set_changed();
         self.fps.set_changed();
         self.auto_switch_n.set_changed();
@@ -132,7 +133,7 @@ impl State {
         //self.playhead.handle_osc_message(msg) ||
         self.loop_range.handle_osc_message(msg) ||
         self.auto_skip.handle_osc_message(msg) ||
-        self.drop_frames.handle_osc_message(msg) ||
+        self.frame_repeat.handle_osc_message(msg) ||
         self.loop_to_beat.handle_osc_message(msg) ||
         self.fps.handle_osc_message(msg) ||
         self.auto_switch_n.handle_osc_message(msg) ||
@@ -473,6 +474,8 @@ fn main() -> std::io::Result<()> {
         osc_listener(beat_predictor, external_beat_divider, send_sock, &addr, streaming_params, fps_controller);
     }});
 
+    let mut sd = SigmaDelta::new();
+
     loop {
         loop_timer.begin_loop();
         let mut params = streaming_params.lock().unwrap().clone();
@@ -483,7 +486,7 @@ fn main() -> std::io::Result<()> {
         // Switch video if requested
         if current_video_num as i32 != *state.video_num && *state.video_num < paths.len() as i32 {
             current_video_num = *state.video_num as usize;
-            current_video = 
+            current_video =
                 if opt.prefetch {
                     loaded_videos[current_video_num].clone() //TODO reference
                 } else {
@@ -497,15 +500,6 @@ fn main() -> std::io::Result<()> {
             streaming_params.lock().unwrap().restart_loop = false;
         }
 
-        // Now the state based stuff
-
-
-
-        // Play from file
-        if *state.drop_frames {
-            advance_frame(&mut current_frame, current_video.frames.len());
-        }
-
         if let Some(skip) = params.skip_frames {
             for _ in 0..skip {
                 advance_frame(&mut current_frame, current_video.frames.len()); //TODO advance n
@@ -513,32 +507,46 @@ fn main() -> std::io::Result<()> {
             streaming_params.lock().unwrap().skip_frames = None;
         }
 
+        // Now the state based stuff
+
+        let frame_repeat = sd.put(*state.frame_repeat);
+
         // Restart video if at end
         advance_frame(&mut current_frame, current_video.frames.len());
         let mut nal_unit = &current_video.frames[current_frame];
 
-        // If pass_iframe is not activated, send only CodedSliceNonIdr
-        // Sending a new SPS without an Idr Slice seems to cause problems when switching between some videos
-        if nal_unit.nal_unit_type == NALUnitType::CodedSliceNonIdr || *state.pass_iframe {
-            write_frame(&nal_unit, *state.byte_errors)?;
-            let is_picture_data = nal_unit.nal_unit_type.is_picture_data();
-            if !is_picture_data {
-                continue; //Only sleep if the nal_unit is a video frame
+        for _ in 0..frame_repeat {
+
+            // If pass_iframe is not activated, send only CodedSliceNonIdr
+            // Sending a new SPS without an Idr Slice seems to cause problems when switching between some videos
+            if nal_unit.nal_unit_type == NALUnitType::CodedSliceNonIdr || *state.pass_iframe {
+                //TODO use sigma delta encoder to decide whether to drop/repeat the frame
+                //How do I repeat a frame nicely in this loop? Do I want to sleep here? Maybe better
+                //restart the loop. But how does it interact with the redt
+                // Maybe use a counter somewhere and only `advance_frame` if the counter is reached
+
+                write_frame(&nal_unit, *state.byte_errors)?;
+                let is_picture_data = nal_unit.nal_unit_type.is_picture_data();
+                if !is_picture_data {
+                    continue; //Only sleep if the nal_unit is a video frame
+                }
+            } else {
+                continue; //If we didn't send out frame don't sleep
             }
-        } else {
-            continue; //If we didn't send out frame don't sleep
+
+            let playhead = current_frame as f32 / current_video.frames.len() as f32;
+            {
+                let mut streaming_params = streaming_params.lock().unwrap();
+                streaming_params.active_state_mut().playhead.set(playhead);
+                if let Some(addr) = params.client_addr {
+                    streaming_params.send_changed(&send_sock.lock().unwrap(), &addr);
+                }
+            }
+
+            loop_timer.end_loop();
+
         }
 
-        let playhead = current_frame as f32 / current_video.frames.len() as f32;
-        {
-            let mut streaming_params = streaming_params.lock().unwrap();
-            streaming_params.active_state_mut().playhead.set(playhead);
-            if let Some(addr) = params.client_addr {
-                streaming_params.send_changed(&send_sock.lock().unwrap(), &addr);
-            }
-        }
-
-        loop_timer.end_loop();
     }
 }
 
