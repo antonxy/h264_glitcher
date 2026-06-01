@@ -6,7 +6,7 @@ pub mod uniforms;
 pub use decoder::{DecodedFrame, start_decoder_thread_from_path};
 pub use mask::{create_default_mask, load_mask_texture};
 pub use renderer::{drain_latest_frame, Renderer};
-pub use uniforms::{start_osc_listener, Uniforms};
+pub use uniforms::Uniforms;
 
 use glutin::config::ConfigTemplateBuilder;
 use glutin::context::{ContextApi, ContextAttributesBuilder, Version};
@@ -26,7 +26,7 @@ use os_pipe::PipeReader;
 use std::os::fd::OwnedFd;
 use std::os::fd::AsRawFd;
 
-pub fn run(pipe_reader: PipeReader, mask_path: Option<&Path>) {
+pub fn run(pipe_reader: PipeReader, mask_path: Option<&Path>, uniforms: Arc<Mutex<Uniforms>>) {
     // Start decoder reading from the pipe
     let fd : OwnedFd = pipe_reader.into();
     let input_path = format!("/dev/fd/{}", fd.as_raw_fd());
@@ -110,10 +110,6 @@ pub fn run(pipe_reader: PipeReader, mask_path: Option<&Path>) {
         .unwrap_or_else(|| create_default_mask(&gl, 1920, 1080));
 
     let mut renderer = Renderer::new(gl, mask_texture);
-
-    // Shared uniforms
-    let uniforms = Arc::new(Mutex::new(Uniforms::default()));
-    start_osc_listener(Arc::clone(&uniforms), 9001);
 
     let start_time = Instant::now();
 

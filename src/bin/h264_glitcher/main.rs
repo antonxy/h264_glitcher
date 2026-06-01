@@ -4,26 +4,25 @@ use h264_glitcher::osc_var::{OscVar, LoopRange, OscValue};
 use h264_glitcher::sigma_delta::SigmaDelta;
 use h264_glitcher::fps_loop::{LoopTimer, LoopController};
 use h264_glitcher::player;
+use h264_glitcher::state::{State, ShortLoop, StreamingParams};
+use h264_glitcher::push2;
 
 extern crate structopt;
 mod stream_loop;
 
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::rc::Rc;
-use std::sync::mpsc::{self, Sender, RecvTimeoutError};
 use std::time::Duration;
 use std::vec::Vec;
-use std::collections::VecDeque;
 use structopt::StructOpt;
 use std::thread;
 use std::sync::{Mutex, Arc};
 use std::net::{SocketAddr, UdpSocket};
 use rosc::{OscPacket, OscMessage, encoder, OscType};
 use walkdir::WalkDir;
-use rand::Rng;
 
 #[derive(Debug, Clone, StructOpt)]
 #[structopt(name = "h264_glitcher", about = "Live controllable h264 glitcher.",
@@ -51,190 +50,9 @@ struct Opt {
 
     #[structopt(long, parse(from_os_str), help="Mask image for embedded player (indexed or grayscale PNG)")]
     mask: Option<PathBuf>,
-}
 
-
-
-#[derive(Clone)]
-struct State {
-    video_num: OscVar<i32>,
-    beat_multiplier: OscVar<i32>,
-    pass_iframe: OscVar<bool>,
-    playhead: OscVar<f32>,
-    loop_range: OscVar<LoopRange>,
-    auto_skip: OscVar<bool>,
-    frame_repeat: OscVar<f32>, // Values < 1 drop frames, non integer values drop / repeat frames sometimes
-    loop_to_beat: OscVar<bool>,
-    fps: OscVar<f32>,
-    auto_switch_n: OscVar<i32>,
-    switch_history: VecDeque<usize>,
-    byte_errors: OscVar<f32>,
-}
-
-impl Default for State {
-    fn default() -> Self {
-        Self {
-            video_num: OscVar::new("/video_num", 0),
-            beat_multiplier: OscVar::new("/beat_multiplier", 0),
-            pass_iframe: OscVar::new("/pass_iframe", false),
-            playhead: OscVar::new("/playhead", 0.0),
-            loop_range: OscVar::new("/loop_range", LoopRange(None)),
-            auto_skip: OscVar::new("/auto_skip", false),
-            frame_repeat: OscVar::new("/frame_repeat", 1.0),
-            loop_to_beat: OscVar::new("/loop_to_beat", false),
-            fps: OscVar::new("/fps", 30.0),
-            auto_switch_n: OscVar::new("/auto_switch", 0),
-            switch_history: VecDeque::with_capacity(5),
-            byte_errors: OscVar::new("/byte_errors", 0.0),
-        }
-    }
-}
-
-impl State {
-    fn send_changed(&mut self, socket: &UdpSocket, client_addr: &SocketAddr) {
-        self.video_num.send_if_changed(socket, client_addr);
-        self.beat_multiplier.send_if_changed(socket, client_addr);
-        self.pass_iframe.send_if_changed(socket, client_addr);
-        self.playhead.send_if_changed(socket, client_addr);
-        self.loop_range.send_if_changed(socket, client_addr);
-        self.auto_skip.send_if_changed(socket, client_addr);
-        self.frame_repeat.send_if_changed(socket, client_addr);
-        self.loop_to_beat.send_if_changed(socket, client_addr);
-        self.fps.send_if_changed(socket, client_addr);
-        self.auto_switch_n.send_if_changed(socket, client_addr);
-        self.byte_errors.send_if_changed(socket, client_addr);
-    }
-
-    fn set_changed(&mut self) {
-        self.video_num.set_changed();
-        self.beat_multiplier.set_changed();
-        self.pass_iframe.set_changed();
-        self.playhead.set_changed();
-        self.loop_range.set_changed();
-        self.auto_skip.set_changed();
-        self.frame_repeat.set_changed();
-        self.loop_to_beat.set_changed();
-        self.fps.set_changed();
-        self.auto_switch_n.set_changed();
-        self.byte_errors.set_changed();
-    }
-
-    fn handle_osc_message(&mut self, msg: &OscMessage) -> bool {
-        if self.video_num.handle_osc_message(msg) {
-            if self.switch_history.len() == 5 {
-                self.switch_history.pop_back();
-            }
-            self.switch_history.push_front(*self.video_num as usize);
-        }
-        self.beat_multiplier.handle_osc_message(msg) ||
-        self.pass_iframe.handle_osc_message(msg) ||
-        //self.playhead.handle_osc_message(msg) ||
-        self.loop_range.handle_osc_message(msg) ||
-        self.auto_skip.handle_osc_message(msg) ||
-        self.frame_repeat.handle_osc_message(msg) ||
-        self.loop_to_beat.handle_osc_message(msg) ||
-        self.fps.handle_osc_message(msg) ||
-        self.auto_switch_n.handle_osc_message(msg) ||
-        self.byte_errors.handle_osc_message(msg)
-    }
-}
-
-#[derive(Clone, Debug)]
-struct ShortLoop {
-    first_frame: Option<usize>,
-    len: usize,
-}
-
-
-#[derive(Clone)]
-struct StreamingParams {
-    restart_loop: bool,
-
-    skip_frames: Option<usize>,
-    client_addr: Option<SocketAddr>,
-
-    short_loop: Option<ShortLoop>,
-
-    use_external_beat: OscVar<bool>,
-    beat_offset: OscVar<Duration>,
-    beat_divider: u32,
-
-    state_slots: Vec<State>,
-    active_slot: OscVar<usize>,
-    edit_slot: OscVar<usize>,
-
-    is_live: OscVar<bool>,
-}
-
-impl Default for StreamingParams {
-    fn default() -> Self {
-        Self {
-            restart_loop: false,
-            skip_frames: None,
-            client_addr: None,
-            short_loop: None,
-            use_external_beat: OscVar::new("/use_external_beat", false),
-            beat_offset: OscVar::new("/beat_offset", Duration::from_millis(0)),
-            beat_divider: 1,
-
-            state_slots: vec![State::default(); 6],
-            active_slot: OscVar::new("/active_slot", 0),
-            edit_slot: OscVar::new("/edit_slot", 0),
-
-            is_live: OscVar::new("/is_live", true),
-        }
-    }
-}
-
-impl StreamingParams {
-    fn set_active_slot(&mut self, slot: usize) {
-        assert!(slot < 6);
-        self.active_slot.set(slot);
-        self.active_state_mut().set_changed();
-
-        self.is_live.set(*self.active_slot == *self.edit_slot);
-    }
-
-    fn set_edit_slot(&mut self, slot: usize) {
-        assert!(slot < 6);
-        self.edit_slot.set(slot);
-        self.edit_state_mut().set_changed();
-
-        self.is_live.set(*self.active_slot == *self.edit_slot);
-    }
-
-    fn active_state(&self) -> &State {
-        &self.state_slots[*self.active_slot]
-    }
-
-    fn active_state_mut(&mut self) -> &mut State {
-        &mut self.state_slots[*self.active_slot]
-    }
-
-    fn edit_state(&self) -> &State {
-        &self.state_slots[*self.edit_slot]
-    }
-
-    fn edit_state_mut(&mut self) -> &mut State {
-        &mut self.state_slots[*self.edit_slot]
-    }
-
-    fn send_changed(&mut self, socket: &UdpSocket, client_addr: &SocketAddr) {
-        self.use_external_beat.send_if_changed(socket, client_addr);
-        self.beat_offset.send_if_changed(socket, client_addr);
-        self.active_slot.send_if_changed(socket, client_addr);
-        self.edit_slot.send_if_changed(socket, client_addr);
-        self.edit_state_mut().send_changed(socket, client_addr);
-        self.is_live.send_if_changed(socket, client_addr);
-    }
-
-    fn handle_osc_message(&mut self, msg: &OscMessage) -> bool {
-        self.use_external_beat.handle_osc_message(msg) ||
-        self.beat_offset.handle_osc_message(msg) ||
-        self.active_slot.handle_osc_message(msg) ||
-        self.edit_slot.handle_osc_message(msg) ||
-        self.edit_state_mut().handle_osc_message(msg)
-    }
+    #[structopt(long, help="Enable Push 2 controller")]
+    push2: bool,
 }
 
 
@@ -366,10 +184,21 @@ fn main() -> std::io::Result<()> {
         pipe_writer,
     );
 
+    let uniforms = Arc::new(Mutex::new(player::Uniforms::default()));
+
+    if opt.push2 {
+        let streaming_params = streaming_params.clone();
+        let uniforms = uniforms.clone();
+        thread::spawn(move || {
+            if let Err(e) = push2::run(streaming_params, uniforms) {
+                eprintln!("Push 2 error: {}", e);
+            }
+        });
+    }
 
     // Run the player (blocks)
     let mask_path = opt.mask.clone();
-    player::run(pipe_reader, mask_path.as_deref());
+    player::run(pipe_reader, mask_path.as_deref(), uniforms);
 
     Ok(())
 }

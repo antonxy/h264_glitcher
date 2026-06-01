@@ -45,8 +45,11 @@ in pkgs.mkShell rec {
     #aubio-beat-osc
     #pypkgs.doit
 
-    # For player:
+    pkgs.pkg-config
+    pkgs.clang
+    pkgs.llvmPackages.libclang
 
+    # For player:
     pkgs.ffmpeg_7-headless
     pkgs.ffmpeg_7-headless.dev
     pkgs.libGL
@@ -58,9 +61,10 @@ in pkgs.mkShell rec {
     pkgs.xorg.libXi
     pkgs.xorg.libxcb
     pkgs.libxkbcommon
-    pkgs.pkg-config
-    pkgs.clang
-    pkgs.llvmPackages.libclang
+
+    # For push 2
+    pkgs.alsa-lib
+    pkgs.libusb1
   ];
   #LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
   #LD_PRELOAD = "${pkgs.xorg.libX11}/lib/libX11.so ${pkgs.xorg.libXcursor}/lib/libXcursor.so ${pkgs.xorg.libXrandr}/lib/libXrandr.so ${pkgs.xorg.libXi}/lib/libXi.so ${pkgs.xorg.libxcb}/lib/libxcb.so";

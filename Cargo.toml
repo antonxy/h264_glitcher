@@ -41,3 +41,9 @@ winit = "0.29"
 raw-window-handle = "0.5"
 glutin-winit = "0.4"
 png = "0.17"
+
+# For Push 2
+push2_display = "0.2"
+midir = "0.10"
+anyhow = "1.0"
+embedded-graphics = "0.7"
