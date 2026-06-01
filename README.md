@@ -32,7 +32,7 @@ doit
 
 ### Run glitcher
 ```
-cargo run --release -- --input-dir videos/ |  mpv --no-correct-pts --fps=1000 --no-cache -
+cargo run --release --bin h264_glitcher -- --input-dir videos/ |  mpv --no-correct-pts --no-cache -
 ```
 We had reports of crashing AMD GPUs when using hardware decoding. If you are experiencing problems add `--hwdec=no` to your `mpv` command.  
 
