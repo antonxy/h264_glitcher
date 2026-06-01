@@ -34,4 +34,16 @@ impl BeatPredictor {
         let dur_to_next_beat = beat_length - dur_since_last_beat;
         Some(dur_to_next_beat)
     }
+
+    pub fn duration_since_last_beat(&self, offset: Duration) -> Option<Duration> {
+        if self.input_beats.len() < 2 {
+            return None
+        }
+
+        let time = Instant::now() + offset;
+        let dur_since_last_input_beat = time - self.input_beats[1];
+        let beat_length = (self.input_beats[1] - self.input_beats[0]).mul_f32(self.multiplier);
+        let dur_since_last_beat = Duration::from_micros((dur_since_last_input_beat.as_micros() % beat_length.as_micros()) as u64);
+        Some(dur_since_last_beat)
+    }
 }

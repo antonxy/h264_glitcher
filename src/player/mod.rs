@@ -19,14 +19,23 @@ use std::num::NonZeroU32;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+use std::time::Duration;
 use winit::event::{Event, WindowEvent};
 use winit::event_loop::EventLoop;
 use winit::window::{Fullscreen, WindowBuilder};
 use os_pipe::PipeReader;
 use std::os::fd::OwnedFd;
 use std::os::fd::AsRawFd;
+use crate::beat_predictor::BeatPredictor;
+use crate::state::StreamingParams;
 
-pub fn run(pipe_reader: PipeReader, mask_path: Option<&Path>, uniforms: Arc<Mutex<Uniforms>>) {
+pub fn run(
+    pipe_reader: PipeReader,
+    mask_path: Option<&Path>,
+    uniforms: Arc<Mutex<Uniforms>>, // TODO maybe instead of passing in uniforms, make it part of state, then it also works with the slots
+    beat_predictor: Arc<Mutex<BeatPredictor>>,
+    streaming_params: Arc<Mutex<StreamingParams>>,
+) {
     // Start decoder reading from the pipe
     let fd : OwnedFd = pipe_reader.into();
     let input_path = format!("/dev/fd/{}", fd.as_raw_fd());
@@ -129,6 +138,8 @@ pub fn run(pipe_reader: PipeReader, mask_path: Option<&Path>, uniforms: Arc<Mute
                             let mut u = uniforms.lock().unwrap();
                             u.time = start_time.elapsed().as_secs_f32();
                         }
+
+                        // TODO we can calculate strobe effects here
 
                         let u = uniforms.lock().unwrap().clone();
                         let size = window.inner_size();

@@ -7,7 +7,7 @@ uniform sampler2D tex_y;
 uniform sampler2D tex_u;
 uniform sampler2D tex_v;
 uniform usampler2D tex_mask;
-uniform float time;
+//uniform float time;
 uniform float flash;
 uniform vec3 effect_color;
 

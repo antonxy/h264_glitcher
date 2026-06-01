@@ -12,6 +12,7 @@ use crate::player::Uniforms;
 use crate::osc_var::LoopRange;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+use crate::beat_predictor::BeatPredictor;
 
 // Display dimensions
 const DISPLAY_WIDTH: i32 = 960;
@@ -23,27 +24,19 @@ const BEAT_FLASH_DURATION_MS: u128 = 100;
 
 pub fn run(
     streaming_params: Arc<Mutex<StreamingParams>>,
+    beat_predictor: Arc<Mutex<BeatPredictor>>,
     uniforms: Arc<Mutex<Uniforms>>,
 ) -> Result<()> {
-    println!("Push2Control - Loop Controller");
-
     // Initialize Push 2
     let mut push2 = Push2::new()?;
     println!("Connected to Push 2");
 
     push2.set_user_mode()?;
 
-    let mut needs_redraw = true;
+    // Single strobe
+    push2.set_pad_color(7, 7, Color::LightGray)?;
+
     let mut last_redraw = Instant::now();
-    let mut last_beat: Option<Instant> = None;
-
-    // Set initial button color
-    {
-        let params = streaming_params.lock().unwrap();
-        update_repeat_button(&mut push2, *params.active_state().frame_repeat)?;
-    }
-
-    println!("Ready!");
 
     loop {
         // Handle Push 2 events
@@ -51,33 +44,19 @@ pub fn run(
             match event {
                 Push2Event::EncoderTurn { encoder, delta } => {
                     let mut params = streaming_params.lock().unwrap();
-                    let changed = handle_encoder(&mut params, encoder, delta);
-                    if changed {
-                        match encoder {
-                            Encoder::Track4 => {
-                                update_repeat_button(&mut push2, *params.active_state().frame_repeat)?;
-                            }
-                            _ => {}
-                        }
-                        needs_redraw = true;
-                    }
+                    let _changed = handle_encoder(&mut params, encoder, delta);
                 }
                 Push2Event::ButtonPressed { button: Button::TrackAbove4 } => {
                     // Reset frame repeat to 1.0
                     let mut params = streaming_params.lock().unwrap();
-                    params.active_state_mut().frame_repeat.set(1.0);
-                    update_repeat_button(&mut push2, 1.0)?;
-                    needs_redraw = true;
+                    params.edit_state_mut().frame_repeat.set(1.0);
                 }
                 Push2Event::ButtonPressed { button: Button::TapTempo } => {
                     // Send manual beat - trigger restart_loop if loop_to_beat is enabled
                     let mut params = streaming_params.lock().unwrap();
-                    if *params.active_state().loop_to_beat {
-                        params.restart_loop = true;
+                    if !*params.use_external_beat {
+                        beat_predictor.lock().unwrap().put_input_beat();
                     }
-                    // Flash the LED
-                    last_beat = Some(Instant::now());
-                    push2.set_button_color(Button::TapTempo, Color::White)?;
                 }
                 // Top right pad (row 7, col 7) - LED flash for compositor
                 Push2Event::PadPressed { row: 7, col: 7, .. } => {
@@ -88,25 +67,31 @@ pub fn run(
                 Push2Event::PadReleased { row: 7, col: 7 } => {
                     let mut u = uniforms.lock().unwrap();
                     u.flash = 0.0;
-                    push2.set_pad_color(7, 7, Color::Off)?;
+                    push2.set_pad_color(7, 7, Color::LightGray)?;
                 }
                 _ => {}
             }
         }
 
-        // Turn off beat LED after flash duration
-        if let Some(beat_time) = last_beat {
-            if beat_time.elapsed().as_millis() > BEAT_FLASH_DURATION_MS {
-                push2.set_button_color(Button::TapTempo, Color::Off)?;
-                last_beat = None;
+        // Flash Tap button with beat
+        {
+            let params = streaming_params.lock().unwrap();
+            if let Some(dur) = beat_predictor.lock().unwrap().duration_since_last_beat(*params.beat_offset) {
+                if dur.as_millis() < 100 {
+                    push2.set_button_color(Button::TapTempo, Color::White)?;
+                } else {
+                    push2.set_button_color(Button::TapTempo, Color::Off)?;
+                }
             }
         }
 
-        // Redraw display if needed or periodically
-        if needs_redraw || last_redraw.elapsed().as_secs() >= 1 {
+
+        // Redraw display periodically
+        if last_redraw.elapsed().as_millis() >= 30 {
             let params = streaming_params.lock().unwrap();
             draw_timeline(&mut push2, &params)?;
-            needs_redraw = false;
+            draw_encoders(&mut push2, &params)?;
+            push2.display.flush()?;
             last_redraw = Instant::now();
         }
 
@@ -117,7 +102,7 @@ pub fn run(
 fn handle_encoder(params: &mut StreamingParams, encoder: Encoder, delta: i8) -> bool {
     let sensitivity = 0.005;
     let change = delta as f32 * sensitivity;
-    let state = params.active_state_mut();
+    let state = params.edit_state_mut();
 
     match encoder {
         // Encoder 3: FPS (logarithmic)
@@ -176,25 +161,11 @@ fn handle_encoder(params: &mut StreamingParams, encoder: Encoder, delta: i8) -> 
     }
 }
 
-fn update_repeat_button(push2: &mut Push2, frame_repeat: f32) -> Result<()> {
-    let color = if (frame_repeat - 1.0).abs() < 0.01 {
-        Color::Blue
-    } else {
-        Color::Red
-    };
-    push2.set_button_color(Button::TrackAbove4, color)
-}
-
-fn draw_timeline(push2: &mut Push2, params: &StreamingParams) -> Result<()> {
-    let state = params.active_state();
+fn draw_encoders(push2: &mut Push2, params: &StreamingParams) -> Result<()> {
+    let state = params.edit_state();
     let display = &mut push2.display;
 
-    // Colors (Bgr565: blue, green, red - each 5, 6, 5 bits)
-    let bg_color = Bgr565::new(2, 4, 2); // Dark gray
-    let timeline_color = Bgr565::new(8, 16, 8); // Slightly lighter
-    let loop_color = Bgr565::new(31, 20, 0); // Cyan (high blue)
-    let bar_color = Bgr565::new(31, 63, 31); // White
-    let playhead_color = Bgr565::new(0, 20, 31); // Orange (high red)
+    let bg_color = Bgr565::new(0, 0, 0);
     let text_color = Bgr565::new(20, 40, 20); // Light gray
 
     // Clear label area
@@ -226,6 +197,19 @@ fn draw_timeline(push2: &mut Push2, params: &StreamingParams) -> Result<()> {
         Text::with_alignment(label, Point::new(x, 10), text_style, Alignment::Center)
             .draw(display)?;
     }
+    Ok(())
+}
+
+
+fn draw_timeline(push2: &mut Push2, params: &StreamingParams) -> Result<()> {
+    let state = params.edit_state();
+    let display = &mut push2.display;
+
+    let bg_color = Bgr565::new(0, 0, 0);
+    let playhead_color = Bgr565::new(0, 20, 31);
+    let timeline_color = Bgr565::new(8, 16, 8);
+    let loop_color = Bgr565::new(31, 20, 0);
+    let bar_color = Bgr565::new(31, 63, 31);
 
     // Clear timeline area
     Rectangle::new(
@@ -287,9 +271,6 @@ fn draw_timeline(push2: &mut Push2, params: &StreamingParams) -> Result<()> {
     )
     .into_styled(PrimitiveStyle::with_stroke(playhead_color, 2))
     .draw(display)?;
-
-    // Flush to display
-    push2.display.flush()?;
 
     Ok(())
 }

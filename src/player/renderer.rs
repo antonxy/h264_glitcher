@@ -13,9 +13,9 @@ pub struct Renderer {
     tex_mask: glow::Texture,
     frame_width: u32,
     frame_height: u32,
-    loc_time: Option<glow::UniformLocation>,
-    loc_flash: Option<glow::UniformLocation>,
-    loc_effect_color: Option<glow::UniformLocation>,
+    //loc_time: glow::UniformLocation,
+    loc_flash: glow::UniformLocation,
+    loc_effect_color: glow::UniformLocation,
 }
 
 impl Renderer {
@@ -34,22 +34,14 @@ impl Renderer {
 
             // Set texture units
             gl.use_program(Some(program));
-            if let Some(loc) = gl.get_uniform_location(program, "tex_y") {
-                gl.uniform_1_i32(Some(&loc), 0);
-            }
-            if let Some(loc) = gl.get_uniform_location(program, "tex_u") {
-                gl.uniform_1_i32(Some(&loc), 1);
-            }
-            if let Some(loc) = gl.get_uniform_location(program, "tex_v") {
-                gl.uniform_1_i32(Some(&loc), 2);
-            }
-            if let Some(loc) = gl.get_uniform_location(program, "tex_mask") {
-                gl.uniform_1_i32(Some(&loc), 3);
-            }
+            gl.uniform_1_i32(Some(&gl.get_uniform_location(program, "tex_y").unwrap()), 0);
+            gl.uniform_1_i32(Some(&gl.get_uniform_location(program, "tex_u").unwrap()), 1);
+            gl.uniform_1_i32(Some(&gl.get_uniform_location(program, "tex_v").unwrap()), 2);
+            gl.uniform_1_i32(Some(&gl.get_uniform_location(program, "tex_mask").unwrap()), 3);
 
-            let loc_time = gl.get_uniform_location(program, "time");
-            let loc_flash = gl.get_uniform_location(program, "flash");
-            let loc_effect_color = gl.get_uniform_location(program, "effect_color");
+            //let loc_time = gl.get_uniform_location(program, "time").unwrap();
+            let loc_flash = gl.get_uniform_location(program, "flash").unwrap();
+            let loc_effect_color = gl.get_uniform_location(program, "effect_color").unwrap();
 
             Self {
                 gl,
@@ -61,7 +53,7 @@ impl Renderer {
                 tex_mask: mask_texture,
                 frame_width: 0,
                 frame_height: 0,
-                loc_time,
+                //loc_time,
                 loc_flash,
                 loc_effect_color,
             }
@@ -103,20 +95,14 @@ impl Renderer {
             self.gl.bind_texture(glow::TEXTURE_2D, Some(self.tex_mask));
 
             // Set uniforms
-            if let Some(ref loc) = self.loc_time {
-                self.gl.uniform_1_f32(Some(loc), uniforms.time);
-            }
-            if let Some(ref loc) = self.loc_flash {
-                self.gl.uniform_1_f32(Some(loc), uniforms.flash);
-            }
-            if let Some(ref loc) = self.loc_effect_color {
-                self.gl.uniform_3_f32(
-                    Some(loc),
-                    uniforms.effect_color[0],
-                    uniforms.effect_color[1],
-                    uniforms.effect_color[2],
-                );
-            }
+            //self.gl.uniform_1_f32(Some(&self.loc_time), uniforms.time);
+            self.gl.uniform_1_f32(Some(&self.loc_flash), uniforms.flash);
+            self.gl.uniform_3_f32(
+                Some(&self.loc_effect_color),
+                uniforms.effect_color[0],
+                uniforms.effect_color[1],
+                uniforms.effect_color[2],
+            );
 
             self.gl.draw_arrays(glow::TRIANGLES, 0, 6);
         }
