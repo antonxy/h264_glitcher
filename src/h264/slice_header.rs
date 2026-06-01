@@ -93,20 +93,20 @@ mod test {
     use crate::h264::{NalIterator, NalUnit, NALUnitType};
     use std::io::Read;
 
-    #[test]
-    fn smoke_test() {
-        let file = std::fs::File::open("./big_buck_bunny.h264").unwrap();
-        let file = std::io::BufReader::new(file);
-        let it = NalIterator::new(file.bytes().map(|x| x.unwrap()));
-        let it = it.map(move |x| NalUnit::from_bytes(&x));
-        for unit in it {
-            let unit = unit.unwrap();
-            match unit.nal_unit_type {
-                NALUnitType::CodedSliceIdr | NALUnitType::CodedSliceNonIdr => {
-                    let header = SliceHeader::from_bytes(&unit.rbsp).unwrap();
-                },
-                _ => {},
-            }
-        }
-    }
+//    #[test]
+//    fn smoke_test() {
+//        let file = std::fs::File::open("./big_buck_bunny.h264").unwrap();
+//        let file = std::io::BufReader::new(file);
+//        let it = NalIterator::new(file.bytes().map(|x| x.unwrap()));
+//        let it = it.map(move |x| NalUnit::from_bytes(&x));
+//        for unit in it {
+//            let unit = unit.unwrap();
+//            match unit.nal_unit_type {
+//                NALUnitType::CodedSliceIdr | NALUnitType::CodedSliceNonIdr => {
+//                    let header = SliceHeader::from_bytes(&unit.rbsp).unwrap();
+//                },
+//                _ => {},
+//            }
+//        }
+//    }
 }

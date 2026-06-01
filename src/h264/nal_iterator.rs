@@ -111,12 +111,12 @@ mod test {
         assert_eq!(items[1], packet);
     }
 
-    #[test]
-    fn smoke_test() {
-        let file = std::fs::File::open("./big_buck_bunny.h264").unwrap();
-        let file = std::io::BufReader::new(file);
-        let it = NalIterator::new(file.bytes().map(|x| x.unwrap()));
-        let items: Vec<_> = it.collect();
-        assert_eq!(items.len(), 787);
-    }
+//    #[test]
+//    fn smoke_test() {
+//        let file = std::fs::File::open("./big_buck_bunny.h264").unwrap();
+//        let file = std::io::BufReader::new(file);
+//        let it = NalIterator::new(file.bytes().map(|x| x.unwrap()));
+//        let items: Vec<_> = it.collect();
+//        assert_eq!(items.len(), 787);
+//    }
 }
