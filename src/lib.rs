@@ -4,3 +4,4 @@ pub mod fps_loop;
 pub mod thumbnail_server;
 pub mod osc_var;
 pub mod sigma_delta;
+pub mod player;

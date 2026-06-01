@@ -44,10 +44,30 @@ in pkgs.mkShell rec {
     open-stage-control
     #aubio-beat-osc
     #pypkgs.doit
+
+    # For player:
+
+    pkgs.ffmpeg_7-headless
+    pkgs.ffmpeg_7-headless.dev
+    pkgs.libGL
+    pkgs.libGLU
+    pkgs.egl-wayland
+    pkgs.xorg.libX11
+    pkgs.xorg.libXcursor
+    pkgs.xorg.libXrandr
+    pkgs.xorg.libXi
+    pkgs.xorg.libxcb
+    pkgs.libxkbcommon
+    pkgs.pkg-config
+    pkgs.clang
+    pkgs.llvmPackages.libclang
   ];
   #LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
   #LD_PRELOAD = "${pkgs.xorg.libX11}/lib/libX11.so ${pkgs.xorg.libXcursor}/lib/libXcursor.so ${pkgs.xorg.libXrandr}/lib/libXrandr.so ${pkgs.xorg.libXi}/lib/libXi.so ${pkgs.xorg.libxcb}/lib/libxcb.so";
   shellHook = ''
+    export LIBCLANG_PATH="${pkgs.llvmPackages.libclang.lib}/lib"
+    export FFMPEG_DIR="${pkgs.ffmpeg_7-headless.dev}"
+    export BINDGEN_EXTRA_CLANG_ARGS="-I${pkgs.ffmpeg_7-headless.dev}/include"
     export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [
       pkgs.libGL
       pkgs.ffmpeg_7-headless.lib

@@ -8,22 +8,26 @@ use std::net::{SocketAddr, UdpSocket};
 use std::io::Write;
 use rand::Rng;
 
-pub fn start_stream_thread(paths : Vec<PathBuf>, opt: Opt, streaming_params: &Arc<Mutex<StreamingParams>>, loop_timer: LoopTimer, send_sock: &Arc<Mutex<UdpSocket>>) {
+pub fn start_stream_thread<W: Write + Send + 'static>(
+    paths: Vec<PathBuf>,
+    opt: Opt,
+    streaming_params: &Arc<Mutex<StreamingParams>>,
+    loop_timer: LoopTimer,
+    send_sock: &Arc<Mutex<UdpSocket>>,
+    writer: W,
+) {
     let streaming_params = streaming_params.clone();
     let send_sock = send_sock.clone();
     thread::spawn(move || {
-        stream_loop(paths, opt, streaming_params, loop_timer, send_sock);
+        stream_loop(paths, opt, streaming_params, loop_timer, send_sock, writer);
     });
 }
 
-fn stream_loop(paths : Vec<PathBuf>, opt: Opt, streaming_params: Arc<Mutex<StreamingParams>>, mut loop_timer: LoopTimer, send_sock: Arc<Mutex<UdpSocket>>) {
+fn stream_loop<W: Write>(paths : Vec<PathBuf>, opt: Opt, streaming_params: Arc<Mutex<StreamingParams>>, mut loop_timer: LoopTimer, send_sock: Arc<Mutex<UdpSocket>>, mut handle: W) {
     let mut loaded_videos : Vec<Rc<LoadedVideo>> = Vec::new();
     if opt.prefetch {
         loaded_videos = paths.iter().map(|p| Rc::new(LoadedVideo::load(p).unwrap())).collect();
     }
-
-    let stdout = std::io::stdout();
-    let mut handle = stdout.lock();
 
     handle.write_all(&[0x00, 0x00, 0x00, 0x01]).expect("Writing to stdout failed");
 
@@ -121,7 +125,7 @@ fn stream_loop(paths : Vec<PathBuf>, opt: Opt, streaming_params: Arc<Mutex<Strea
     // Write out at least one I-frame
     {
         loop {
-            
+
             let nal_unit = &current_video.frames[current_frame];
             advance_frame(&mut current_frame, current_video.frames.len());
             write_frame(&nal_unit, 0.0).expect("Could not write first I-frame");

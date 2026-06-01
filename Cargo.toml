@@ -17,10 +17,11 @@ name = "inspect_video"
 name = "validate_video_parameters"
 
 [dependencies]
+os_pipe = "1"
 enum_primitive = "0.1.1"
 rand = "0.8"
 structopt = "0.3"
-rosc = "0.6"
+rosc = "0.10"
 itertools = "0.10"
 spin_sleep = "1"
 bitstream-io = "1"
@@ -31,3 +32,12 @@ walkdir = "*"
 axum = "0.8"
 tokio = { version = "1", features = ["net", "rt-multi-thread"] }
 tower-http = { version = "0.6", features = ["fs"] }
+
+# For video player
+ffmpeg-next = "7"
+glow = "0.13"
+glutin = { version = "0.31", default-features = false, features = ["egl", "x11"] }
+winit = "0.29"
+raw-window-handle = "0.5"
+glutin-winit = "0.4"
+png = "0.17"

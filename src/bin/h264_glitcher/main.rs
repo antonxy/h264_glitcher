@@ -3,6 +3,7 @@ use h264_glitcher::beat_predictor::BeatPredictor;
 use h264_glitcher::osc_var::{OscVar, LoopRange, OscValue};
 use h264_glitcher::sigma_delta::SigmaDelta;
 use h264_glitcher::fps_loop::{LoopTimer, LoopController};
+use h264_glitcher::player;
 
 extern crate structopt;
 mod stream_loop;
@@ -24,7 +25,7 @@ use rosc::{OscPacket, OscMessage, encoder, OscType};
 use walkdir::WalkDir;
 use rand::Rng;
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Clone, StructOpt)]
 #[structopt(name = "h264_glitcher", about = "Live controllable h264 glitcher.",
             long_about = "Pipe output into mpv (or any other capable player).")]
 struct Opt {
@@ -47,6 +48,9 @@ struct Opt {
 
     #[structopt(long, default_value = "[::]:3000", help="Thumbnail server listen address")]
     thumbnail_server_listen_addr: String,
+
+    #[structopt(long, parse(from_os_str), help="Mask image for embedded player (indexed or grayscale PNG)")]
+    mask: Option<PathBuf>,
 }
 
 
@@ -349,10 +353,25 @@ fn main() -> std::io::Result<()> {
         osc_listener(beat_predictor, external_beat_divider, send_sock, &addr, streaming_params, loop_controller);
     }});
 
-    stream_loop::start_stream_thread(paths, opt, &streaming_params, loop_timer, &send_sock);
-    loop {
-        std::thread::sleep(std::time::Duration::from_secs(1));
-    }
+    // Create pipe to connect stream loop to player
+    // Using os_pipe because thats easier to connect to ffmpeg than an mpsc
+    let (pipe_reader, pipe_writer) = os_pipe::pipe().expect("Failed to create pipe");
+
+    stream_loop::start_stream_thread(
+        paths,
+        opt.clone(),
+        &streaming_params,
+        loop_timer,
+        &send_sock,
+        pipe_writer,
+    );
+
+
+    // Run the player (blocks)
+    let mask_path = opt.mask.clone();
+    player::run(pipe_reader, mask_path.as_deref());
+
+    Ok(())
 }
 
 
@@ -585,7 +604,7 @@ fn osc_listener(beat_predictor: Arc<Mutex<BeatPredictor>>, external_beat_divider
     loop {
         match sock.recv_from(&mut buf) {
             Ok((size, client_addr)) => {
-                let packet = rosc::decoder::decode(&buf[..size]).unwrap();
+                let (_, packet) = rosc::decoder::decode_udp(&buf[..size]).unwrap();
                 let mut params = streaming_params.lock().unwrap();
                 let parse_result = match packet {
                     OscPacket::Message(ref msg) => {
