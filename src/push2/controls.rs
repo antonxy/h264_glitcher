@@ -3,13 +3,10 @@
 /// Push 2 events
 #[derive(Debug, Clone, PartialEq)]
 pub enum Push2Event {
-    PadPressed { row: u8, col: u8, velocity: u8 },
-    PadReleased { row: u8, col: u8 },
-    ButtonPressed { button: Button },
-    ButtonReleased { button: Button },
+    Pad { row: u8, col: u8, velocity: u8 },
+    Button { button: Button, pressed: bool },
     EncoderTurn { encoder: Encoder, delta: i8 },
-    EncoderTouch { encoder: Encoder },
-    EncoderRelease { encoder: Encoder },
+    EncoderTouch { encoder: Encoder, touched: bool },
     TouchStripTouch,
     TouchStripRelease,
     TouchStripMove { value: u8 },

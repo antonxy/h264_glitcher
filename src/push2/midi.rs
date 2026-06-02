@@ -185,11 +185,7 @@ pub fn parse_midi_message(message: &[u8]) -> Option<super::Push2Event> {
             let velocity = message[2];
 
             if let Some((row, col)) = pad_position(note) {
-                if velocity > 0 {
-                    Some(super::Push2Event::PadPressed { row, col, velocity })
-                } else {
-                    Some(super::Push2Event::PadReleased { row, col })
-                }
+                Some(super::Push2Event::Pad { row, col, velocity })
             } else if note == NOTE_TOUCHSTRIP {
                 if velocity > 0 {
                     Some(super::Push2Event::TouchStripTouch)
@@ -198,11 +194,7 @@ pub fn parse_midi_message(message: &[u8]) -> Option<super::Push2Event> {
                 }
             } else {
                 // Encoder touch (velocity > 0) or release (velocity == 0)
-                if velocity > 0 {
-                    encoder_from_note(note).map(|enc| super::Push2Event::EncoderTouch { encoder: enc })
-                } else {
-                    encoder_from_note(note).map(|enc| super::Push2Event::EncoderRelease { encoder: enc })
-                }
+                encoder_from_note(note).map(|enc| super::Push2Event::EncoderTouch { encoder: enc, touched: velocity > 0 })
             }
         }
         // Note Off
@@ -210,12 +202,12 @@ pub fn parse_midi_message(message: &[u8]) -> Option<super::Push2Event> {
             let note = message[1];
 
             if let Some((row, col)) = pad_position(note) {
-                Some(super::Push2Event::PadReleased { row, col })
+                Some(super::Push2Event::Pad { row, col, velocity: 0 })
             } else if note == NOTE_TOUCHSTRIP {
                 Some(super::Push2Event::TouchStripRelease)
             } else {
                 encoder_from_note(note)
-                    .map(|enc| super::Push2Event::EncoderRelease { encoder: enc })
+                    .map(|enc| super::Push2Event::EncoderTouch { encoder: enc, touched: false })
             }
         }
         // Control Change
@@ -223,19 +215,15 @@ pub fn parse_midi_message(message: &[u8]) -> Option<super::Push2Event> {
             let cc = message[1];
             let value = message[2];
 
-            // Check if it's an encoder
+            // Encoder
             if let Some(encoder) = encoder_from_cc(cc) {
                 let delta = decode_encoder_delta(value);
                 return Some(super::Push2Event::EncoderTurn { encoder, delta });
             }
 
-            // Check if it's a button
+            // Button
             if let Some(button) = super::Button::from_cc(cc) {
-                if value > 0 {
-                    return Some(super::Push2Event::ButtonPressed { button });
-                } else {
-                    return Some(super::Push2Event::ButtonReleased { button });
-                }
+                return Some(super::Push2Event::Button { button, pressed: value > 0 });
             }
 
             // Touchstrip as mod wheel

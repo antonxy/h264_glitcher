@@ -45,12 +45,12 @@ pub fn run(
                     let mut params = streaming_params.lock().unwrap();
                     let _changed = handle_encoder(&mut params, encoder, delta);
                 }
-                Push2Event::ButtonPressed { button: Button::TrackAbove4 } => {
+                Push2Event::Button { button: Button::TrackAbove4, pressed: true } => {
                     // Reset frame repeat to 1.0
                     let mut params = streaming_params.lock().unwrap();
                     params.edit_state_mut().frame_repeat.set(1.0);
                 }
-                Push2Event::ButtonPressed { button: Button::TapTempo } => {
+                Push2Event::Button { button: Button::TapTempo, pressed: true } => {
                     // Send manual beat - trigger restart_loop if loop_to_beat is enabled
                     let mut params = streaming_params.lock().unwrap();
                     if !*params.use_external_beat {
@@ -58,23 +58,31 @@ pub fn run(
                     }
                 }
                 // Top right pad (row 7, col 7) - LED flash for compositor
-                Push2Event::PadPressed { row: 7, col: 7, .. } => {
+                Push2Event::Pad { row: 7, col: 7, velocity } => {
                     let mut params = streaming_params.lock().unwrap();
-                    params.led_flash.set(true);
-                    push2.set_pad_color(7, 7, Color::White)?;
+                    let on = velocity > 0;
+                    params.led_flash.set(on);
+                    push2.set_pad_color(7, 7, if on {Color::White} else {Color::LightGray})?;
                 }
-                Push2Event::PadReleased { row: 7, col: 7 } => {
+                // Video blackout toggle
+                Push2Event::Pad { row: 7, col: 0, velocity } => {
                     let mut params = streaming_params.lock().unwrap();
-                    params.led_flash.set(true);
-                    push2.set_pad_color(7, 7, Color::LightGray)?;
+                    let last_val = *params.video_blackout;
+                    params.video_blackout.set(!last_val);
                 }
                 _ => {}
             }
         }
 
-        // Flash Tap button with beat
-        {
-            let params = streaming_params.lock().unwrap();
+        // Update display and button state periodically
+        if last_redraw.elapsed().as_millis() >= 30 {
+            // Read only copy of params
+            let params = { streaming_params.lock().unwrap().clone() };
+
+            // Blackout button
+            push2.set_pad_color(7, 0, if *params.video_blackout {Color::White} else {Color::Blue})?;
+
+            // Flash Tap button with beat
             if let Some(dur) = beat_predictor.lock().unwrap().duration_since_last_beat(*params.beat_offset) {
                 if dur.as_millis() < 100 {
                     push2.set_button_color(Button::TapTempo, Color::White)?;
@@ -82,12 +90,7 @@ pub fn run(
                     push2.set_button_color(Button::TapTempo, Color::Off)?;
                 }
             }
-        }
 
-
-        // Redraw display periodically
-        if last_redraw.elapsed().as_millis() >= 30 {
-            let params = streaming_params.lock().unwrap();
             draw_timeline(&mut push2, &params)?;
             draw_encoders(&mut push2, &params)?;
             push2.display.flush()?;
@@ -104,6 +107,22 @@ fn handle_encoder(params: &mut StreamingParams, encoder: Encoder, delta: i8) -> 
     let state = params.edit_state_mut();
 
     match encoder {
+        // Encoder 1: LED Gain (log-ish)
+        Encoder::Track1 => {
+            let current = *params.led_gain;
+            let scale = current.max(0.01);
+            let new_val = (current + change * scale * 4.0).clamp(0.0, 1.0);
+            params.led_gain.set(new_val);
+            true
+        }
+        // Encoder 2: Video Gain (log-ish)
+        Encoder::Track2 => {
+            let current = *params.video_gain;
+            let scale = current.max(0.01);
+            let new_val = (current + change * scale * 4.0).clamp(0.0, 1.0);
+            params.video_gain.set(new_val);
+            true
+        }
         // Encoder 3: FPS (logarithmic)
         Encoder::Track3 => {
             let current = *state.fps;
@@ -180,10 +199,14 @@ fn draw_encoders(push2: &mut Push2, params: &StreamingParams) -> Result<()> {
     let encoder_width = DISPLAY_WIDTH / 8;
 
     // Format labels with current values
+    let led_gain_label = format!("LED {:.0}", *params.led_gain);
+    let video_gain_label = format!("Video {:.0}", *params.video_gain);
     let fps_label = format!("FPS {:.0}", *state.fps);
     let repeat_label = format!("Repeat {:.1}", *state.frame_repeat);
 
-    let labels: [(i32, &str); 6] = [
+    let labels: [(i32, &str); 8] = [
+        (1, &led_gain_label),
+        (2, &video_gain_label),
         (3, &fps_label),
         (4, &repeat_label),
         (5, "Shift"),
