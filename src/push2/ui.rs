@@ -25,7 +25,6 @@ const BEAT_FLASH_DURATION_MS: u128 = 100;
 pub fn run(
     streaming_params: Arc<Mutex<StreamingParams>>,
     beat_predictor: Arc<Mutex<BeatPredictor>>,
-    uniforms: Arc<Mutex<Uniforms>>,
 ) -> Result<()> {
     // Initialize Push 2
     let mut push2 = Push2::new()?;
@@ -60,13 +59,13 @@ pub fn run(
                 }
                 // Top right pad (row 7, col 7) - LED flash for compositor
                 Push2Event::PadPressed { row: 7, col: 7, .. } => {
-                    let mut u = uniforms.lock().unwrap();
-                    u.flash = 1.0;
+                    let mut params = streaming_params.lock().unwrap();
+                    params.led_flash.set(true);
                     push2.set_pad_color(7, 7, Color::White)?;
                 }
                 Push2Event::PadReleased { row: 7, col: 7 } => {
-                    let mut u = uniforms.lock().unwrap();
-                    u.flash = 0.0;
+                    let mut params = streaming_params.lock().unwrap();
+                    params.led_flash.set(true);
                     push2.set_pad_color(7, 7, Color::LightGray)?;
                 }
                 _ => {}

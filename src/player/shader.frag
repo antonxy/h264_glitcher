@@ -7,9 +7,12 @@ uniform sampler2D tex_y;
 uniform sampler2D tex_u;
 uniform sampler2D tex_v;
 uniform usampler2D tex_mask;
+
 //uniform float time;
-uniform float flash;
-uniform vec3 effect_color;
+uniform float video_gain;
+uniform float led_gain;
+
+uniform vec3 led_color;
 
 void main() {
     // YUV -> RGB conversion
@@ -20,8 +23,8 @@ void main() {
                       y - 0.344 * u - 0.714 * v,
                       y + 1.772 * u);
 
-    // Effect (flash with color)
-    vec3 effect = effect_color * flash;
+    vec3 led_out = led_color * led_gain;
+    vec3 video_out = video * video_gain;
 
     // Mask index (0-255)
     uint mask = texture(tex_mask, uv).r;
@@ -34,10 +37,10 @@ void main() {
 
     vec3 out_color = vec3(0,0,0);
     if (is_led) {
-        out_color = effect;
+        out_color = led_out;
     }
     if (is_screen) {
-        out_color = video;
+        out_color = video_out;
     }
 
 

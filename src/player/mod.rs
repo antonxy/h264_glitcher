@@ -1,12 +1,11 @@
 pub mod decoder;
 pub mod mask;
 pub mod renderer;
-pub mod uniforms;
 
 pub use decoder::{DecodedFrame, start_decoder_thread_from_path};
 pub use mask::{create_default_mask, load_mask_texture};
 pub use renderer::{drain_latest_frame, Renderer};
-pub use uniforms::Uniforms;
+pub use renderer::Uniforms;
 
 use glutin::config::ConfigTemplateBuilder;
 use glutin::context::{ContextApi, ContextAttributesBuilder, Version};
@@ -32,7 +31,6 @@ use crate::state::StreamingParams;
 pub fn run(
     pipe_reader: PipeReader,
     mask_path: Option<&Path>,
-    uniforms: Arc<Mutex<Uniforms>>, // TODO maybe instead of passing in uniforms, make it part of state, then it also works with the slots
     beat_predictor: Arc<Mutex<BeatPredictor>>,
     streaming_params: Arc<Mutex<StreamingParams>>,
 ) {
@@ -133,17 +131,25 @@ pub fn run(
                             renderer.upload_frame(&frame);
                         }
 
-                        // Update time uniform
-                        {
-                            let mut u = uniforms.lock().unwrap();
-                            u.time = start_time.elapsed().as_secs_f32();
-                        }
+                        let uniforms = {
+                            let params = streaming_params.lock().unwrap();
+                            let led_color = if *params.led_flash {
+                                [1.0, 1.0, 1.0]
+                            } else {
+                                [0.0, 0.0, 0.0]
+                            };
+                            Uniforms {
+                                time: start_time.elapsed().as_secs_f32(),
+                                video_gain: *params.video_gain,
+                                led_gain: *params.led_gain,
+                                led_color,
+                            }
+                        };
 
-                        // TODO we can calculate strobe effects here
+                        // TODO we can calculate beat based strobe effects here
 
-                        let u = uniforms.lock().unwrap().clone();
                         let size = window.inner_size();
-                        renderer.draw(&u, size.width, size.height);
+                        renderer.draw(&uniforms, size.width, size.height);
 
                         gl_surface.swap_buffers(&gl_context).expect("Failed to swap buffers");
 

@@ -105,6 +105,11 @@ pub struct StreamingParams {
     pub beat_offset: OscVar<Duration>,
     pub beat_divider: u32,
 
+    pub video_gain: OscVar<f32>,
+    pub video_blackout: OscVar<bool>,
+    pub led_gain: OscVar<f32>,
+    pub led_flash: OscVar<bool>,
+
     pub state_slots: Vec<State>,
     pub active_slot: OscVar<usize>,
     pub edit_slot: OscVar<usize>,
@@ -122,6 +127,11 @@ impl Default for StreamingParams {
             use_external_beat: OscVar::new("/use_external_beat", false),
             beat_offset: OscVar::new("/beat_offset", Duration::from_millis(0)),
             beat_divider: 1,
+
+            video_gain: OscVar::new("/video_gain", 1.0),
+            video_blackout: OscVar::new("/video_blackout", false),
+            led_gain: OscVar::new("/led_gain", 1.0),
+            led_flash: OscVar::new("/led_flash", false),
 
             state_slots: vec![State::default(); 6],
             active_slot: OscVar::new("/active_slot", 0),

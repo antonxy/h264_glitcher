@@ -184,14 +184,11 @@ fn main() -> std::io::Result<()> {
         pipe_writer,
     );
 
-    let uniforms = Arc::new(Mutex::new(player::Uniforms::default()));
-
     if opt.push2 {
         let streaming_params = streaming_params.clone();
-        let uniforms = uniforms.clone();
         let beat_predictor = beat_predictor.clone();
         thread::spawn(move || {
-            if let Err(e) = push2::run(streaming_params, beat_predictor, uniforms) {
+            if let Err(e) = push2::run(streaming_params, beat_predictor) {
                 eprintln!("Push 2 error: {}", e);
             }
         });
@@ -199,7 +196,7 @@ fn main() -> std::io::Result<()> {
 
     // Run the player (blocks)
     let mask_path = opt.mask.clone();
-    player::run(pipe_reader, mask_path.as_deref(), uniforms, beat_predictor, streaming_params);
+    player::run(pipe_reader, mask_path.as_deref(), beat_predictor, streaming_params);
 
     Ok(())
 }

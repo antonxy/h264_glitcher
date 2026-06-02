@@ -1,7 +1,25 @@
 use super::decoder::DecodedFrame;
-use super::uniforms::Uniforms;
 use glow::HasContext;
 use std::sync::mpsc::Receiver;
+
+#[derive(Clone)]
+pub struct Uniforms {
+    pub time: f32,
+    pub video_gain: f32,
+    pub led_gain: f32,
+    pub led_color: [f32; 3],
+}
+
+impl Default for Uniforms {
+    fn default() -> Self {
+        Self {
+            time: 0.0,
+            video_gain: 1.0,
+            led_gain: 1.0,
+            led_color: [0.0, 0.0, 0.0],
+        }
+    }
+}
 
 pub struct Renderer {
     gl: glow::Context,
@@ -14,8 +32,9 @@ pub struct Renderer {
     frame_width: u32,
     frame_height: u32,
     //loc_time: glow::UniformLocation,
-    loc_flash: glow::UniformLocation,
-    loc_effect_color: glow::UniformLocation,
+    loc_video_gain: glow::UniformLocation,
+    loc_led_gain: glow::UniformLocation,
+    loc_led_color: glow::UniformLocation,
 }
 
 impl Renderer {
@@ -40,8 +59,10 @@ impl Renderer {
             gl.uniform_1_i32(Some(&gl.get_uniform_location(program, "tex_mask").unwrap()), 3);
 
             //let loc_time = gl.get_uniform_location(program, "time").unwrap();
-            let loc_flash = gl.get_uniform_location(program, "flash").unwrap();
-            let loc_effect_color = gl.get_uniform_location(program, "effect_color").unwrap();
+            // If a uniform is not found here it might be because it's "optimized out" of the shader
+            let loc_video_gain = gl.get_uniform_location(program, "video_gain").unwrap();
+            let loc_led_gain = gl.get_uniform_location(program, "led_gain").unwrap();
+            let loc_led_color = gl.get_uniform_location(program, "led_color").unwrap();
 
             Self {
                 gl,
@@ -54,8 +75,9 @@ impl Renderer {
                 frame_width: 0,
                 frame_height: 0,
                 //loc_time,
-                loc_flash,
-                loc_effect_color,
+                loc_video_gain,
+                loc_led_gain,
+                loc_led_color,
             }
         }
     }
@@ -96,12 +118,13 @@ impl Renderer {
 
             // Set uniforms
             //self.gl.uniform_1_f32(Some(&self.loc_time), uniforms.time);
-            self.gl.uniform_1_f32(Some(&self.loc_flash), uniforms.flash);
+            self.gl.uniform_1_f32(Some(&self.loc_video_gain), uniforms.video_gain);
+            self.gl.uniform_1_f32(Some(&self.loc_led_gain), uniforms.led_gain);
             self.gl.uniform_3_f32(
-                Some(&self.loc_effect_color),
-                uniforms.effect_color[0],
-                uniforms.effect_color[1],
-                uniforms.effect_color[2],
+                Some(&self.loc_led_color),
+                uniforms.led_color[0],
+                uniforms.led_color[1],
+                uniforms.led_color[2],
             );
 
             self.gl.draw_arrays(glow::TRIANGLES, 0, 6);
