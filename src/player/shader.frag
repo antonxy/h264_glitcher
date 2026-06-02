@@ -43,6 +43,6 @@ void main() {
         out_color = video_out;
     }
 
-
-    frag_color = vec4(out_color, 1.0);
+    float gamma = 1.0/2.2;
+    frag_color = vec4(pow(out_color.rgb, vec3(1.0/gamma)), 1.0);
 }
