@@ -13,6 +13,7 @@ use crate::osc_var::LoopRange;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use crate::beat_predictor::BeatPredictor;
+use crate::fps_loop::LoopController;
 
 // Display dimensions
 const DISPLAY_WIDTH: i32 = 960;
@@ -25,6 +26,7 @@ const BEAT_FLASH_DURATION_MS: u128 = 100;
 pub fn run(
     streaming_params: Arc<Mutex<StreamingParams>>,
     beat_predictor: Arc<Mutex<BeatPredictor>>,
+    mut fps_controller: LoopController,
 ) -> Result<()> {
     // Initialize Push 2
     let mut push2 = Push2::new()?;
@@ -43,7 +45,7 @@ pub fn run(
             match event {
                 Push2Event::EncoderTurn { encoder, delta } => {
                     let mut params = streaming_params.lock().unwrap();
-                    let _changed = handle_encoder(&mut params, encoder, delta);
+                    let _changed = handle_encoder(&mut params, &mut fps_controller, encoder, delta);
                 }
                 Push2Event::Button { button: Button::TrackAbove4, pressed: true } => {
                     // Reset frame repeat to 1.0
@@ -65,7 +67,7 @@ pub fn run(
                     push2.set_pad_color(7, 7, if on {Color::White} else {Color::LightGray})?;
                 }
                 // Video blackout toggle
-                Push2Event::Pad { row: 7, col: 0, velocity } => {
+                Push2Event::Pad { row: 7, col: 0, velocity } if velocity > 0 => {
                     let mut params = streaming_params.lock().unwrap();
                     let last_val = *params.video_blackout;
                     params.video_blackout.set(!last_val);
@@ -101,7 +103,7 @@ pub fn run(
     }
 }
 
-fn handle_encoder(params: &mut StreamingParams, encoder: Encoder, delta: i8) -> bool {
+fn handle_encoder(params: &mut StreamingParams, fps_controller: &mut LoopController, encoder: Encoder, delta: i8) -> bool {
     let sensitivity = 0.005;
     let change = delta as f32 * sensitivity;
     let state = params.edit_state_mut();
@@ -129,6 +131,7 @@ fn handle_encoder(params: &mut StreamingParams, encoder: Encoder, delta: i8) -> 
             let scale = current.max(1.0);
             let new_val = (current + change * scale * 4.0).clamp(1.0, 120.0);
             state.fps.set(new_val);
+            fps_controller.set_fps(new_val);
             true
         }
         // Encoder 4: Frame repeat (logarithmic)

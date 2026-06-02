@@ -138,9 +138,14 @@ pub fn run(
                             } else {
                                 [0.0, 0.0, 0.0]
                             };
+                            let video_gain = if *params.video_blackout {
+                                0.0
+                            } else {
+                                *params.video_gain
+                            };
                             Uniforms {
                                 time: start_time.elapsed().as_secs_f32(),
-                                video_gain: *params.video_gain,
+                                video_gain,
                                 led_gain: *params.led_gain,
                                 led_color,
                             }

@@ -188,7 +188,7 @@ fn main() -> std::io::Result<()> {
         let streaming_params = streaming_params.clone();
         let beat_predictor = beat_predictor.clone();
         thread::spawn(move || {
-            if let Err(e) = push2::run(streaming_params, beat_predictor) {
+            if let Err(e) = push2::run(streaming_params, beat_predictor, loop_controller) {
                 eprintln!("Push 2 error: {}", e);
             }
         });
