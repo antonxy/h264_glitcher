@@ -28,6 +28,14 @@ use std::os::fd::AsRawFd;
 use crate::beat_predictor::BeatPredictor;
 use crate::state::StreamingParams;
 
+fn beat_flash(beat: &BeatPredictor, offset: Duration, divisions: Option<u32>) -> bool {
+    let dur = match divisions {
+        Some(div) => beat.duration_since_last_beat_mul(offset, 1.0 / div as f32),
+        None => return false, // No beat flash if no divisions set
+    };
+    dur.map_or(false, |d| d.as_millis() < 30)
+}
+
 pub fn run(
     pipe_reader: PipeReader,
     mask_path: Option<&Path>,
@@ -133,7 +141,11 @@ pub fn run(
 
                         let uniforms = {
                             let params = streaming_params.lock().unwrap();
-                            let led_color = if *params.led_flash {
+                            let beat = beat_predictor.lock().unwrap();
+                            let flash =
+                                *params.led_flash ||
+                                beat_flash(&beat, *params.beat_offset, params.led_flash_beats);
+                            let led_color = if flash {
                                 [1.0, 1.0, 1.0]
                             } else {
                                 [0.0, 0.0, 0.0]

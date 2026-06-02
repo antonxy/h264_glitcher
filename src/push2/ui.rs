@@ -21,7 +21,13 @@ const LABEL_HEIGHT: i32 = 16;
 const TIMELINE_HEIGHT: i32 = 40;
 const TIMELINE_Y: i32 = LABEL_HEIGHT;
 
-const BEAT_FLASH_DURATION_MS: u128 = 100;
+fn toggle<T: PartialEq + Copy>(var: &mut T, val: T, reset: T) {
+    if var == &val {
+        *var = reset;
+    } else {
+        *var = val;
+    }
+}
 
 pub fn run(
     streaming_params: Arc<Mutex<StreamingParams>>,
@@ -35,7 +41,7 @@ pub fn run(
     push2.set_user_mode()?;
 
     // Single strobe
-    push2.set_pad_color(7, 7, Color::LightGray)?;
+    push2.set_pad_color(6, 7, Color::LightGray)?;
 
     let mut last_redraw = Instant::now();
 
@@ -60,11 +66,27 @@ pub fn run(
                     }
                 }
                 // Top right pad (row 7, col 7) - LED flash for compositor
-                Push2Event::Pad { row: 7, col: 7, velocity } => {
+                Push2Event::Pad { row: 6, col: 7, velocity } => {
                     let mut params = streaming_params.lock().unwrap();
                     let on = velocity > 0;
                     params.led_flash.set(on);
-                    push2.set_pad_color(7, 7, if on {Color::White} else {Color::LightGray})?;
+                    push2.set_pad_color(6, 7, if on {Color::White} else {Color::LightGray})?;
+                }
+                Push2Event::Pad { row: 7, col: 4, velocity } if velocity > 0 => {
+                    let mut params = streaming_params.lock().unwrap();
+                    toggle(&mut params.led_flash_beats, Some(1), None);
+                }
+                Push2Event::Pad { row: 7, col: 5, velocity } if velocity > 0 => {
+                    let mut params = streaming_params.lock().unwrap();
+                    toggle(&mut params.led_flash_beats, Some(2), None);
+                }
+                Push2Event::Pad { row: 7, col: 6, velocity } if velocity > 0 => {
+                    let mut params = streaming_params.lock().unwrap();
+                    toggle(&mut params.led_flash_beats, Some(4), None);
+                }
+                Push2Event::Pad { row: 7, col: 7, velocity } if velocity > 0 => {
+                    let mut params = streaming_params.lock().unwrap();
+                    toggle(&mut params.led_flash_beats, Some(8), None);
                 }
                 // Video blackout toggle
                 Push2Event::Pad { row: 7, col: 0, velocity } if velocity > 0 => {
@@ -82,7 +104,12 @@ pub fn run(
             let params = { streaming_params.lock().unwrap().clone() };
 
             // Blackout button
-            push2.set_pad_color(7, 0, if *params.video_blackout {Color::White} else {Color::Blue})?;
+            push2.set_pad_color(7, 0, if *params.video_blackout {Color::Red} else {Color::Blue})?;
+
+            push2.set_pad_color(7, 4, if params.led_flash_beats == Some(1) {Color::White} else {Color::LightGray})?;
+            push2.set_pad_color(7, 5, if params.led_flash_beats == Some(2) {Color::White} else {Color::LightGray})?;
+            push2.set_pad_color(7, 6, if params.led_flash_beats == Some(4) {Color::White} else {Color::LightGray})?;
+            push2.set_pad_color(7, 7, if params.led_flash_beats == Some(8) {Color::White} else {Color::LightGray})?;
 
             // Flash Tap button with beat
             if let Some(dur) = beat_predictor.lock().unwrap().duration_since_last_beat(*params.beat_offset) {
@@ -202,8 +229,8 @@ fn draw_encoders(push2: &mut Push2, params: &StreamingParams) -> Result<()> {
     let encoder_width = DISPLAY_WIDTH / 8;
 
     // Format labels with current values
-    let led_gain_label = format!("LED {:.0}", *params.led_gain);
-    let video_gain_label = format!("Video {:.0}", *params.video_gain);
+    let led_gain_label = format!("LED {:.2}", *params.led_gain);
+    let video_gain_label = format!("Video {:.2}", *params.video_gain);
     let fps_label = format!("FPS {:.0}", *state.fps);
     let repeat_label = format!("Repeat {:.1}", *state.frame_repeat);
 
