@@ -1,10 +1,9 @@
 use std::thread;
-use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::path::PathBuf;
-use crate::{Opt, LoadedVideo, NalUnit, NALUnitType, SliceHeader, StreamingParams, SigmaDelta};
+use crate::{Opt, VideoLibrary, NalUnit, NALUnitType, SliceHeader, StreamingParams, SigmaDelta};
 use h264_glitcher::fps_loop::LoopTimer;
-use std::net::{SocketAddr, UdpSocket};
+use std::net::UdpSocket;
 use std::io::Write;
 use rand::Rng;
 
@@ -24,9 +23,9 @@ pub fn start_stream_thread<W: Write + Send + 'static>(
 }
 
 fn stream_loop<W: Write>(paths : Vec<PathBuf>, opt: Opt, streaming_params: Arc<Mutex<StreamingParams>>, mut loop_timer: LoopTimer, send_sock: Arc<Mutex<UdpSocket>>, mut handle: W) {
-    let mut loaded_videos : Vec<Rc<LoadedVideo>> = Vec::new();
+    let mut library = VideoLibrary::new(paths);
     if opt.prefetch {
-        loaded_videos = paths.iter().map(|p| Rc::new(LoadedVideo::load(p).unwrap())).collect();
+        library.preload_all();
     }
 
     handle.write_all(&[0x00, 0x00, 0x00, 0x01]).expect("Writing to stdout failed");
@@ -80,7 +79,6 @@ fn stream_loop<W: Write>(paths : Vec<PathBuf>, opt: Opt, streaming_params: Arc<M
         Ok(())
     };
     let mut current_video_num: usize = 0;
-    let mut current_video: Rc<LoadedVideo> = Rc::new(LoadedVideo::load(&paths[0]).expect("failed to load video"));
     let mut current_frame: usize = 0;
 
 
@@ -125,9 +123,9 @@ fn stream_loop<W: Write>(paths : Vec<PathBuf>, opt: Opt, streaming_params: Arc<M
     // Write out at least one I-frame
     {
         loop {
-
-            let nal_unit = &current_video.frames[current_frame];
-            advance_frame(&mut current_frame, current_video.frames.len());
+            let video = library.get(current_video_num);
+            let nal_unit = video.read_nal(current_frame).expect("Failed to read NAL");
+            advance_frame(&mut current_frame, video.len());
             write_frame(&nal_unit, 0.0).expect("Could not write first I-frame");
             if nal_unit.nal_unit_type == NALUnitType::CodedSliceIdr {
                 eprintln!("Got first I frame");
@@ -148,15 +146,8 @@ fn stream_loop<W: Write>(paths : Vec<PathBuf>, opt: Opt, streaming_params: Arc<M
         // Process all "requests"
 
         // Switch video if requested
-        if current_video_num as i32 != *state.video_num && *state.video_num < paths.len() as i32 {
+        if current_video_num as i32 != *state.video_num && *state.video_num < library.len() as i32 {
             current_video_num = *state.video_num as usize;
-            current_video =
-                if opt.prefetch {
-                    loaded_videos[current_video_num].clone() //TODO reference
-                } else {
-                    // TODO this error should be handled
-                    Rc::new(LoadedVideo::load(&paths[current_video_num]).unwrap())
-                };
             current_frame = 0;
         }
 
@@ -167,7 +158,7 @@ fn stream_loop<W: Write>(paths : Vec<PathBuf>, opt: Opt, streaming_params: Arc<M
 
         if let Some(skip) = params.skip_frames {
             for _ in 0..skip {
-                advance_frame(&mut current_frame, current_video.frames.len()); //TODO advance n
+                advance_frame(&mut current_frame, library.get(current_video_num).len()); //TODO advance n
             }
             streaming_params.lock().unwrap().skip_frames = None;
         }
@@ -177,8 +168,9 @@ fn stream_loop<W: Write>(paths : Vec<PathBuf>, opt: Opt, streaming_params: Arc<M
         let frame_repeat = sd.put(*state.frame_repeat);
 
         // Restart video if at end
-        advance_frame(&mut current_frame, current_video.frames.len());
-        let mut nal_unit = &current_video.frames[current_frame];
+        let video = library.get(current_video_num);
+        advance_frame(&mut current_frame, video.len());
+        let nal_unit = video.read_nal(current_frame).expect("Failed to read NAL");
 
         for _ in 0..frame_repeat {
 
@@ -199,7 +191,7 @@ fn stream_loop<W: Write>(paths : Vec<PathBuf>, opt: Opt, streaming_params: Arc<M
                 continue; //If we didn't send out frame don't sleep
             }
 
-            let playhead = current_frame as f32 / current_video.frames.len() as f32;
+            let playhead = current_frame as f32 / library.get(current_video_num).len() as f32;
             {
                 let mut streaming_params = streaming_params.lock().unwrap();
                 streaming_params.active_state_mut().playhead.set(playhead);

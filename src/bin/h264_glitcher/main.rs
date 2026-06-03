@@ -11,8 +11,8 @@ extern crate structopt;
 mod stream_loop;
 
 use std::fs::File;
-use std::io::Read;
-use std::path::PathBuf;
+use std::io::{Read, Seek, SeekFrom, BufReader};
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::rc::Rc;
 use std::time::Duration;
@@ -56,26 +56,75 @@ struct Opt {
 }
 
 
-#[derive(Clone)]
+/// Contains an open video file and an index for fast access to NALs
 struct LoadedVideo {
-    frames: Vec<NalUnit>,
+    file: File,
+    nal_locations: Vec<NalLocation>,
 }
+
 impl LoadedVideo {
-    fn load(path: &std::path::Path) -> std::io::Result<LoadedVideo> {
-        eprintln!("Open file {:?}", path);
-        let input_file = File::open(path)?;
-        let file = std::io::BufReader::with_capacity(1<<20, input_file);
-        let it = NalIterator::new(file.bytes().map(|x| x.unwrap()));
-        let it = it.map(|data| NalUnit::from_bytes(&data)).filter_map(|r| {
-            match r {
-                Ok(v) => Some(v),
-                Err(err) => {
-                    eprintln!("Failed to parse frame: {:?}", err);
-                    None
-                }
+    fn load(path: &Path) -> std::io::Result<LoadedVideo> {
+        let mut file = File::open(path)?;
+
+        let mut data = Vec::new();
+        file.read_to_end(&mut data)?;
+        let nal_locations: Vec<NalLocation> = NalOffsetIterator::new(data.iter().copied()).collect();
+        eprintln!("Indexed {} NALs from {:?}", nal_locations.len(), path);
+
+        Ok(LoadedVideo { file, nal_locations })
+    }
+
+    fn len(&self) -> usize {
+        self.nal_locations.len()
+    }
+
+    fn read_nal(&mut self, index: usize) -> Result<NalUnit, String> {
+        let loc = *self.nal_locations.get(index)
+            .ok_or_else(|| format!("NAL index {} out of bounds", index))?;
+
+        let mut bytes = vec![0u8; loc.length];
+        self.file.seek(SeekFrom::Start(loc.offset as u64))
+            .map_err(|e| format!("Seek failed: {}", e))?;
+        self.file.read_exact(&mut bytes)
+            .map_err(|e| format!("Read failed: {}", e))?;
+
+        NalUnit::from_bytes(&bytes).map_err(|e| format!("Parse failed: {:?}", e))
+    }
+}
+
+struct VideoLibrary {
+    paths: Vec<PathBuf>,
+    cache: Vec<Option<LoadedVideo>>,
+}
+
+impl VideoLibrary {
+    fn new(paths: Vec<PathBuf>) -> Self {
+        let cache: Vec<Option<LoadedVideo>> = (0..paths.len()).map(|_| None).collect();
+        VideoLibrary { paths, cache }
+    }
+
+    fn len(&self) -> usize {
+        self.paths.len()
+    }
+
+    fn get(&mut self, index: usize) -> &mut LoadedVideo {
+        if self.cache[index].is_none() {
+            let video = LoadedVideo::load(&self.paths[index])
+                .expect("Failed to load video");
+            self.cache[index] = Some(video);
+        }
+        self.cache[index].as_mut().unwrap()
+    }
+
+    fn preload_all(&mut self) {
+        for i in 0..self.paths.len() {
+            if self.cache[i].is_none() {
+                self.cache[i] = Some(
+                    LoadedVideo::load(&self.paths[i])
+                    .expect("Failed to load video in preload")
+                )
             }
-        });
-        Ok(LoadedVideo { frames: it.collect() })
+        }
     }
 }
 
