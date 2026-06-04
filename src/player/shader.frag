@@ -11,6 +11,7 @@ uniform usampler2D tex_mask;
 //uniform float time;
 uniform float video_gain;
 uniform float led_gain;
+uniform float video_to_led;
 
 uniform vec3 led_color;
 
@@ -37,7 +38,7 @@ void main() {
 
     vec3 out_color = vec3(0,0,0);
     if (is_led) {
-        out_color = led_out;
+        out_color = led_out + video * led_gain * video_to_led;
     }
     if (is_screen) {
         out_color = video_out;

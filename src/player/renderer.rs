@@ -8,6 +8,7 @@ pub struct Uniforms {
     pub video_gain: f32,
     pub led_gain: f32,
     pub led_color: [f32; 3],
+    pub video_to_led: f32,
 }
 
 impl Default for Uniforms {
@@ -17,6 +18,7 @@ impl Default for Uniforms {
             video_gain: 1.0,
             led_gain: 1.0,
             led_color: [0.0, 0.0, 0.0],
+            video_to_led: 0.0,
         }
     }
 }
@@ -35,6 +37,7 @@ pub struct Renderer {
     loc_video_gain: glow::UniformLocation,
     loc_led_gain: glow::UniformLocation,
     loc_led_color: glow::UniformLocation,
+    loc_video_to_led: glow::UniformLocation,
 }
 
 impl Renderer {
@@ -63,6 +66,7 @@ impl Renderer {
             let loc_video_gain = gl.get_uniform_location(program, "video_gain").unwrap();
             let loc_led_gain = gl.get_uniform_location(program, "led_gain").unwrap();
             let loc_led_color = gl.get_uniform_location(program, "led_color").unwrap();
+            let loc_video_to_led = gl.get_uniform_location(program, "video_to_led").unwrap();
 
             Self {
                 gl,
@@ -78,6 +82,7 @@ impl Renderer {
                 loc_video_gain,
                 loc_led_gain,
                 loc_led_color,
+                loc_video_to_led,
             }
         }
     }
@@ -126,6 +131,7 @@ impl Renderer {
                 uniforms.led_color[1],
                 uniforms.led_color[2],
             );
+            self.gl.uniform_1_f32(Some(&self.loc_video_to_led), uniforms.video_to_led);
 
             self.gl.draw_arrays(glow::TRIANGLES, 0, 6);
         }

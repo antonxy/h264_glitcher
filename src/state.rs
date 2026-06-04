@@ -111,6 +111,7 @@ pub struct StreamingParams {
     pub led_flash: OscVar<bool>,
 
     pub led_flash_beats: Option<u32>,
+    pub video_to_led: Option<f32>,
 
     pub state_slots: Vec<State>,
     pub active_slot: OscVar<usize>,
@@ -136,6 +137,7 @@ impl Default for StreamingParams {
             led_flash: OscVar::new("/led_flash", false),
 
             led_flash_beats: None,
+            video_to_led: None,
 
             state_slots: vec![State::default(); 6],
             active_slot: OscVar::new("/active_slot", 0),

@@ -160,6 +160,7 @@ pub fn run(
                                 video_gain,
                                 led_gain: *params.led_gain,
                                 led_color,
+                                video_to_led: params.video_to_led.unwrap_or(0.0),
                             }
                         };
 

@@ -109,7 +109,7 @@ fn run_connected(
                     let playhead = *params.edit_state().playhead;
                     let (start, end) = params.edit_state().loop_range.0.unwrap_or((0.0, 1.0));
                     if velocity > 0 {
-                        params.edit_state_mut().loop_range.set(LoopRange(Some((playhead, end))));
+                        params.edit_state_mut().loop_range.set(LoopRange(Some((playhead, 1.0))));
                     } else {
                         params.edit_state_mut().loop_range.set(LoopRange(Some((start, playhead))));
                     }
@@ -124,6 +124,16 @@ fn run_connected(
                     let mut params = streaming_params.lock().unwrap();
                     let last_val = *params.video_blackout;
                     params.video_blackout.set(!last_val);
+                }
+                // Video to LED 50% passthrough toggle
+                Push2Event::Pad { row: 7, col: 1, velocity } if velocity > 0 => {
+                    let mut params = streaming_params.lock().unwrap();
+                    toggle(&mut params.video_to_led, Some(0.5), None);
+                }
+                // Video to LED 100% passthrough toggle
+                Push2Event::Pad { row: 7, col: 2, velocity } if velocity > 0 => {
+                    let mut params = streaming_params.lock().unwrap();
+                    toggle(&mut params.video_to_led, Some(1.0), None);
                 }
                 // Loop to beat toggle (button under End encoder)
                 Push2Event::Button { button: Button::TrackAbove8, pressed: true } => {
@@ -142,6 +152,9 @@ fn run_connected(
 
             // Blackout button
             push2.set_pad_color(7, 0, if *params.video_blackout {Color::Red} else {Color::Blue})?;
+            // Video to LED passthrough buttons (green off, red on)
+            push2.set_pad_color(7, 1, if params.video_to_led == Some(0.5) {Color::Red} else {Color::Green})?;
+            push2.set_pad_color(7, 2, if params.video_to_led == Some(1.0) {Color::Red} else {Color::Green})?;
 
             // LED flash beat buttons (row 6, col 0-3)
             push2.set_pad_color(6, 0, if params.led_flash_beats == Some(1) {Color::White} else {Color::LightGray})?;
