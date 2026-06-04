@@ -125,12 +125,12 @@ fn run_connected(
                     let last_val = *params.video_blackout;
                     params.video_blackout.set(!last_val);
                 }
-                // Video to LED 50% passthrough toggle
+                // Video to LED weak
                 Push2Event::Pad { row: 7, col: 1, velocity } if velocity > 0 => {
                     let mut params = streaming_params.lock().unwrap();
-                    toggle(&mut params.video_to_led, Some(0.5), None);
+                    toggle(&mut params.video_to_led, Some(0.6), None);
                 }
-                // Video to LED 100% passthrough toggle
+                // Video to LED strong
                 Push2Event::Pad { row: 7, col: 2, velocity } if velocity > 0 => {
                     let mut params = streaming_params.lock().unwrap();
                     toggle(&mut params.video_to_led, Some(1.0), None);
@@ -153,7 +153,7 @@ fn run_connected(
             // Blackout button
             push2.set_pad_color(7, 0, if *params.video_blackout {Color::Red} else {Color::Blue})?;
             // Video to LED passthrough buttons (green off, red on)
-            push2.set_pad_color(7, 1, if params.video_to_led == Some(0.5) {Color::Red} else {Color::Green})?;
+            push2.set_pad_color(7, 1, if params.video_to_led == Some(0.6) {Color::Red} else {Color::Green})?;
             push2.set_pad_color(7, 2, if params.video_to_led == Some(1.0) {Color::Red} else {Color::Green})?;
 
             // LED flash beat buttons (row 6, col 0-3)
