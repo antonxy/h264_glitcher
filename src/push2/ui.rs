@@ -32,16 +32,30 @@ fn toggle<T: PartialEq + Copy>(var: &mut T, val: T, reset: T) {
 pub fn run(
     streaming_params: Arc<Mutex<StreamingParams>>,
     beat_predictor: Arc<Mutex<BeatPredictor>>,
-    mut fps_controller: LoopController,
+    fps_controller: LoopController,
+) -> Result<()> {
+    loop {
+        match run_connected(&streaming_params, &beat_predictor, &fps_controller) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                eprintln!("Push 2 disconnected: {}. Reconnecting...", e);
+                std::thread::sleep(std::time::Duration::from_secs(2));
+            }
+        }
+    }
+}
+
+fn run_connected(
+    streaming_params: &Arc<Mutex<StreamingParams>>,
+    beat_predictor: &Arc<Mutex<BeatPredictor>>,
+    fps_controller: &LoopController,
 ) -> Result<()> {
     // Initialize Push 2
     let mut push2 = Push2::new()?;
     println!("Connected to Push 2");
 
     push2.set_user_mode()?;
-
-    // Single strobe
-    push2.set_pad_color(6, 7, Color::LightGray)?;
+    let mut fps_controller = fps_controller.clone();
 
     let mut last_redraw = Instant::now();
 
@@ -65,34 +79,57 @@ pub fn run(
                         beat_predictor.lock().unwrap().put_input_beat();
                     }
                 }
-                // Top right pad (row 7, col 7) - LED flash for compositor
-                Push2Event::Pad { row: 6, col: 7, velocity } => {
+                // Single strobe pad
+                Push2Event::Pad { row: 5, col: 0, velocity } => {
                     let mut params = streaming_params.lock().unwrap();
                     let on = velocity > 0;
                     params.led_flash.set(on);
-                    push2.set_pad_color(6, 7, if on {Color::White} else {Color::LightGray})?;
+                    push2.set_pad_color(5, 0, if on {Color::White} else {Color::LightGray})?;
                 }
-                Push2Event::Pad { row: 7, col: 4, velocity } if velocity > 0 => {
+                // LED flash beat toggles (row 6, col 0-3)
+                Push2Event::Pad { row: 6, col: 0, velocity } if velocity > 0 => {
                     let mut params = streaming_params.lock().unwrap();
                     toggle(&mut params.led_flash_beats, Some(1), None);
                 }
-                Push2Event::Pad { row: 7, col: 5, velocity } if velocity > 0 => {
+                Push2Event::Pad { row: 6, col: 1, velocity } if velocity > 0 => {
                     let mut params = streaming_params.lock().unwrap();
                     toggle(&mut params.led_flash_beats, Some(2), None);
                 }
-                Push2Event::Pad { row: 7, col: 6, velocity } if velocity > 0 => {
+                Push2Event::Pad { row: 6, col: 2, velocity } if velocity > 0 => {
                     let mut params = streaming_params.lock().unwrap();
                     toggle(&mut params.led_flash_beats, Some(4), None);
                 }
-                Push2Event::Pad { row: 7, col: 7, velocity } if velocity > 0 => {
+                Push2Event::Pad { row: 6, col: 3, velocity } if velocity > 0 => {
                     let mut params = streaming_params.lock().unwrap();
                     toggle(&mut params.led_flash_beats, Some(8), None);
+                }
+                // Record loop
+                Push2Event::Pad { row: 7, col: 6, velocity } => {
+                    let mut params = streaming_params.lock().unwrap();
+                    let playhead = *params.edit_state().playhead;
+                    let (start, end) = params.edit_state().loop_range.0.unwrap_or((0.0, 1.0));
+                    if velocity > 0 {
+                        params.edit_state_mut().loop_range.set(LoopRange(Some((playhead, end))));
+                    } else {
+                        params.edit_state_mut().loop_range.set(LoopRange(Some((start, playhead))));
+                    }
+                }
+                // Clear loop
+                Push2Event::Pad { row: 7, col: 7, velocity } if velocity > 0 => {
+                    let mut params = streaming_params.lock().unwrap();
+                    params.edit_state_mut().loop_range.set(LoopRange(Some((0.0, 1.0))));
                 }
                 // Video blackout toggle
                 Push2Event::Pad { row: 7, col: 0, velocity } if velocity > 0 => {
                     let mut params = streaming_params.lock().unwrap();
                     let last_val = *params.video_blackout;
                     params.video_blackout.set(!last_val);
+                }
+                // Loop to beat toggle (button under End encoder)
+                Push2Event::Button { button: Button::TrackAbove8, pressed: true } => {
+                    let mut params = streaming_params.lock().unwrap();
+                    let current = *params.edit_state().loop_to_beat;
+                    params.edit_state_mut().loop_to_beat.set(!current);
                 }
                 _ => {}
             }
@@ -106,10 +143,19 @@ pub fn run(
             // Blackout button
             push2.set_pad_color(7, 0, if *params.video_blackout {Color::Red} else {Color::Blue})?;
 
-            push2.set_pad_color(7, 4, if params.led_flash_beats == Some(1) {Color::White} else {Color::LightGray})?;
-            push2.set_pad_color(7, 5, if params.led_flash_beats == Some(2) {Color::White} else {Color::LightGray})?;
-            push2.set_pad_color(7, 6, if params.led_flash_beats == Some(4) {Color::White} else {Color::LightGray})?;
-            push2.set_pad_color(7, 7, if params.led_flash_beats == Some(8) {Color::White} else {Color::LightGray})?;
+            // LED flash beat buttons (row 6, col 0-3)
+            push2.set_pad_color(6, 0, if params.led_flash_beats == Some(1) {Color::White} else {Color::LightGray})?;
+            push2.set_pad_color(6, 1, if params.led_flash_beats == Some(2) {Color::White} else {Color::LightGray})?;
+            push2.set_pad_color(6, 2, if params.led_flash_beats == Some(4) {Color::White} else {Color::LightGray})?;
+            push2.set_pad_color(6, 3, if params.led_flash_beats == Some(8) {Color::White} else {Color::LightGray})?;
+            // Single strobe pad
+            push2.set_pad_color(5, 0, Color::LightGray)?;
+            // Record loop and Clear loop
+            push2.set_pad_color(7, 6, Color::Red)?;
+            push2.set_pad_color(7, 7, Color::Orange)?;
+
+            // Loop to beat button (under End encoder)
+            push2.set_button_color(Button::TrackAbove8, if *params.edit_state().loop_to_beat {Color::Green} else {Color::Index(17)})?;
 
             // Flash Tap button with beat
             if let Some(dur) = beat_predictor.lock().unwrap().duration_since_last_beat(*params.beat_offset) {
