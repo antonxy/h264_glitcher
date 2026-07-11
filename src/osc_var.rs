@@ -67,7 +67,7 @@ impl<T : PartialEq + OscValue + Copy + OscValue<Target = T>> OscVar<T> {
 
     pub fn handle_osc_message(&mut self, msg: &OscMessage) -> bool {
         if msg.addr == self.address {
-            let value = T::try_from_args(&msg.args).unwrap();
+            let value = T::try_from_args(&msg.args).unwrap(); //TODO maybe don't crash on malformed message pls
             if self.value != value {
                 self.value = value;
                 self.changed_incoming = true;
@@ -94,7 +94,7 @@ impl OscValue for LoopRange {
             Some((from, to)) => vec![Into::into(from), Into::into(to)],
             None => vec![Into::into(0.0), Into::into(1.0)],
         }
-        
+
     }
 
     fn try_from_args(args: &Vec<OscType>) -> Option<Self> {
@@ -106,7 +106,7 @@ impl OscValue for Duration {
     type Target = Duration;
     fn to_args(self) -> Vec<OscType> {
         vec![self.as_secs_f32().into()]
-        
+
     }
 
     fn try_from_args(args: &Vec<OscType>) -> Option<Self> {
@@ -118,7 +118,7 @@ impl OscValue for usize {
     type Target = usize;
     fn to_args(self) -> Vec<OscType> {
         vec![(self as i32).into()]
-        
+
     }
 
     fn try_from_args(args: &Vec<OscType>) -> Option<Self> {
@@ -134,7 +134,7 @@ macro_rules! value_impl {
             fn to_args(self) -> Vec<OscType> {
                 vec![Into::into(self)]
             }
-        
+
             fn try_from_args(args: &Vec<OscType>) -> Option<Self::Target> {
                 Some(args[0].clone().$name()?)
             }

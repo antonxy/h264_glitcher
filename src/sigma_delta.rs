@@ -1,4 +1,5 @@
-
+/// Since a frame can only be repeated an integer number of times
+/// use a sigma delta modulator to get the repeat count right on average
 pub struct SigmaDelta {
     integrator: f32
 }

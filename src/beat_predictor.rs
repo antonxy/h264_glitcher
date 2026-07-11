@@ -1,6 +1,38 @@
 use std::time::{Instant, Duration};
 use std::collections::VecDeque;
 
+#[derive(Clone)]
+pub struct BeatGrid {
+    pub beats_per_bar: u32,
+    pub bar_start_time: f64,
+    pub bar_duration: f64,
+}
+
+impl Default for BeatGrid {
+    fn default() -> Self {
+        Self {
+            beats_per_bar: 4,
+            bar_start_time: 0.0,
+            bar_duration: 1.0/30.0,
+        }
+    }
+}
+
+impl BeatGrid {
+}
+
+pub struct BeatTap {
+    input_beats: VecDeque<Instant>,
+}
+
+impl BeatTap {
+    /// Enter a user tap. Will return a new BeatGrid after enough taps have been received.
+// When do we have enough taps? Do we know the new grid immediately or do we have to wait a bit until no taps are coming?
+    pub fn tap(&mut self) -> Option<BeatGrid> {
+        unimplemented!();
+    }
+}
+
 pub struct BeatPredictor {
     input_beats: VecDeque<Instant>,
     pub multiplier: f32,

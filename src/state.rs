@@ -3,6 +3,7 @@ use rosc::OscMessage;
 use std::collections::VecDeque;
 use std::net::{SocketAddr, UdpSocket};
 use std::time::Duration;
+use crate::beat_predictor::BeatGrid;
 
 #[derive(Clone)]
 pub struct State {
@@ -96,12 +97,11 @@ pub struct ShortLoop {
 
 #[derive(Clone)]
 pub struct StreamingParams {
-    pub restart_loop: bool,
     pub skip_frames: Option<usize>,
     pub client_addr: Option<SocketAddr>,
     pub short_loop: Option<ShortLoop>,
 
-    pub use_external_beat: OscVar<bool>,
+    pub beat_grid: BeatGrid,
     pub beat_offset: OscVar<Duration>,
     pub beat_divider: u32,
 
@@ -123,11 +123,11 @@ pub struct StreamingParams {
 impl Default for StreamingParams {
     fn default() -> Self {
         Self {
-            restart_loop: false,
             skip_frames: None,
             client_addr: None,
             short_loop: None,
-            use_external_beat: OscVar::new("/use_external_beat", false),
+
+            beat_grid: BeatGrid::default(),
             beat_offset: OscVar::new("/beat_offset", Duration::from_millis(0)),
             beat_divider: 1,
 
@@ -182,7 +182,6 @@ impl StreamingParams {
     }
 
     pub fn send_changed(&mut self, socket: &UdpSocket, client_addr: &SocketAddr) {
-        self.use_external_beat.send_if_changed(socket, client_addr);
         self.beat_offset.send_if_changed(socket, client_addr);
         self.active_slot.send_if_changed(socket, client_addr);
         self.edit_slot.send_if_changed(socket, client_addr);
@@ -191,7 +190,6 @@ impl StreamingParams {
     }
 
     pub fn handle_osc_message(&mut self, msg: &OscMessage) -> bool {
-        self.use_external_beat.handle_osc_message(msg) ||
         self.beat_offset.handle_osc_message(msg) ||
         self.active_slot.handle_osc_message(msg) ||
         self.edit_slot.handle_osc_message(msg) ||

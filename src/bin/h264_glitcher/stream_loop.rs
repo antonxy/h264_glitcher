@@ -6,23 +6,23 @@ use h264_glitcher::fps_loop::LoopTimer;
 use std::net::UdpSocket;
 use std::io::Write;
 use rand::Rng;
+use std::time::{Instant, Duration};
 
 pub fn start_stream_thread<W: Write + Send + 'static>(
     paths: Vec<PathBuf>,
     opt: Opt,
     streaming_params: &Arc<Mutex<StreamingParams>>,
-    loop_timer: LoopTimer,
     send_sock: &Arc<Mutex<UdpSocket>>,
     writer: W,
 ) {
     let streaming_params = streaming_params.clone();
     let send_sock = send_sock.clone();
     thread::spawn(move || {
-        stream_loop(paths, opt, streaming_params, loop_timer, send_sock, writer);
+        stream_loop(paths, opt, streaming_params, send_sock, writer);
     });
 }
 
-fn stream_loop<W: Write>(paths : Vec<PathBuf>, opt: Opt, streaming_params: Arc<Mutex<StreamingParams>>, mut loop_timer: LoopTimer, send_sock: Arc<Mutex<UdpSocket>>, mut handle: W) {
+fn stream_loop<W: Write>(paths : Vec<PathBuf>, opt: Opt, streaming_params: Arc<Mutex<StreamingParams>>, send_sock: Arc<Mutex<UdpSocket>>, mut handle: W) {
     let mut library = VideoLibrary::new(paths);
     if opt.prefetch {
         library.preload_all();
@@ -135,9 +135,77 @@ fn stream_loop<W: Write>(paths : Vec<PathBuf>, opt: Opt, streaming_params: Arc<M
     }
 
     let mut sd = SigmaDelta::new();
-    let mut fps = 30.0_f32;
     let mut frame_repeats_left: i32 = 0;
 
+
+// Pseudocode
+/*
+
+Process requests from state
+
+Calculate next frame time
+Wait for next frame, max 100ms
+if wait timed out, recalculate next frame time (in case FPS changed)
+
+Process beat if one happened in the meantime
+
+*/
+
+    let mut last_frame_time = Instant::now();
+
+    loop {
+        let mut params : StreamingParams = streaming_params.lock().unwrap().clone();
+        let state = params.active_state().clone();
+
+        // Switch video if requested
+        if current_video_num as i32 != *state.video_num && *state.video_num < library.len() as i32 {
+            current_video_num = *state.video_num as usize;
+            current_frame = 0;
+        }
+
+        let fps = *state.fps;
+        let next_frame_time = last_frame_time + Duration::from_secs_f32(1.0/fps);
+        let sleep_duration = (next_frame_time - Instant::now()).min(Duration::from_millis(100)); // Sleep at most 100ms so that state changes can be handled quickly enough
+        std::thread::sleep(sleep_duration);
+        if Instant::now() < next_frame_time {
+            // If we woke up early, restart the loop so that we update the FPS and handle request, in case changes came in inbetween
+            continue;
+        }
+
+        // TODO Here we can handle beat based stuff
+        // If the FPS is low it could be a bit delayed vs the beat. But that might be fine
+
+        // Emit the next frame
+
+        let video = library.get(current_video_num);
+
+        // Keep going until we found a non-I-frame
+        // TODO could hang if we have only I frames in a video for whatever reason
+        loop {
+            // Restart video if at end
+            // TODO only advance frame if we repeated it often enough
+            advance_frame(&mut current_frame, video.len());
+            let nal_unit = video.read_nal(current_frame).expect("Failed to read NAL");
+
+            // If pass_iframe is not activated, send only CodedSliceNonIdr
+            // Sending a new SPS without an Idr Slice seems to cause problems when switching between some videos
+            if nal_unit.nal_unit_type == NALUnitType::CodedSliceNonIdr || *state.pass_iframe {
+                //TODO use sigma delta encoder to decide whether to drop/repeat the frame
+                //How do I repeat a frame nicely in this loop? Do I want to sleep here? Maybe better
+                //restart the loop. But how does it interact with the redt
+                // Maybe use a counter somewhere and only `advance_frame` if the counter is reached
+
+                write_frame(&nal_unit, *state.byte_errors).expect("failed to write frame to stdout");
+                if nal_unit.nal_unit_type.is_picture_data() {
+                    last_frame_time = Instant::now();
+                    break;
+                }
+            }
+        }
+    }
+
+
+/*
     loop {
         loop_timer.begin_loop();
         let mut params = streaming_params.lock().unwrap().clone();
@@ -149,11 +217,6 @@ fn stream_loop<W: Write>(paths : Vec<PathBuf>, opt: Opt, streaming_params: Arc<M
         if current_video_num as i32 != *state.video_num && *state.video_num < library.len() as i32 {
             current_video_num = *state.video_num as usize;
             current_frame = 0;
-        }
-
-        if params.restart_loop {
-            current_frame = 0; // Will be set to loop start by advance_frame(...)
-            streaming_params.lock().unwrap().restart_loop = false;
         }
 
         if let Some(skip) = params.skip_frames {
@@ -205,4 +268,5 @@ fn stream_loop<W: Write>(paths : Vec<PathBuf>, opt: Opt, streaming_params: Arc<M
         }
 
     }
+*/
 }
