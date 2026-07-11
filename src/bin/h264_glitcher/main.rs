@@ -1,5 +1,5 @@
 use h264_glitcher::h264::*;
-use h264_glitcher::beat_predictor::BeatPredictor;
+use h264_glitcher::beat_predictor::BeatTap;
 use h264_glitcher::osc_var::{OscVar, LoopRange, OscValue};
 use h264_glitcher::sigma_delta::SigmaDelta;
 use h264_glitcher::player;
@@ -22,6 +22,7 @@ use std::sync::{Mutex, Arc};
 use std::net::{SocketAddr, UdpSocket};
 use rosc::{OscPacket, OscMessage, encoder, OscType};
 use walkdir::WalkDir;
+use std::time::Instant;
 
 #[derive(Debug, Clone, StructOpt)]
 #[structopt(name = "h264_glitcher", about = "Live controllable h264 glitcher.",
@@ -345,6 +346,8 @@ fn osc_listener(send_sock: Arc<Mutex<UdpSocket>>, addr: &SocketAddr, streaming_p
 
     let mut buf = [0u8; rosc::decoder::MTU];
 
+    let mut beat_tap = BeatTap::new();
+
     let mut parse_message = |msg: &OscMessage, params: &mut StreamingParams, client_addr: SocketAddr| -> Result<(), ()> {
         if params.handle_osc_message(&msg) {}
         else {
@@ -391,13 +394,11 @@ fn osc_listener(send_sock: Arc<Mutex<UdpSocket>>, addr: &SocketAddr, streaming_p
                         params.short_loop = None;
                     }
                 }
-/*
                 "/manual_beat" => {
-                    if !*params.use_external_beat {
-                        beat_predictor.lock().unwrap().put_input_beat();
+                    if let Some(beat_grid) = beat_tap.tap() {
+                        params.beat_grid = beat_grid;
                     }
                 },
-*/
                 "/reset" => {
                     *params.edit_state_mut() = State::default();
                     params.edit_state_mut().set_changed();
@@ -432,6 +433,32 @@ fn osc_listener(send_sock: Arc<Mutex<UdpSocket>>, addr: &SocketAddr, streaming_p
         }
         Ok(())
     };
+
+    // Beat blink thread
+    thread::spawn({
+        let params = streaming_params.clone();
+        let send_sock = send_sock.clone();
+        move || {
+            let mut last_time = Instant::now();
+            loop {
+                let current_time = Instant::now();
+                let params = params.lock().unwrap().clone();
+                if params.beat_grid.has_beat_occurred(current_time, last_time, 0) {
+                    if let Some(client_addr) = params.client_addr {
+                        // Send beat
+                        let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
+                            addr: "/beat_delayed".to_string(),
+                            args: vec![OscType::Int(1)],
+                        })).unwrap();
+                        send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
+                    }
+                }
+                last_time = current_time;
+                // TODO we kind of know when the next beat will occurr
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    });
 
     loop {
         match sock.recv_from(&mut buf) {

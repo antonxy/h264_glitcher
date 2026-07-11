@@ -3,33 +3,72 @@ use std::collections::VecDeque;
 
 #[derive(Clone)]
 pub struct BeatGrid {
-    pub beats_per_bar: u32,
-    pub bar_start_time: f64,
-    pub bar_duration: f64,
+    pub bar_start_time: Instant,
+    pub bar_duration: Duration,
 }
 
 impl Default for BeatGrid {
     fn default() -> Self {
         Self {
-            beats_per_bar: 4,
-            bar_start_time: 0.0,
-            bar_duration: 1.0/30.0,
+            bar_start_time: Instant::now(),
+            bar_duration: Duration::from_secs_f32(1.0/30.0),
         }
     }
 }
 
+
 impl BeatGrid {
+    /// Has a beat occurred betwen two time instances?
+    ///
+    /// `now` is inclusive, `last` is exclusive
+    ///
+    /// `division_level` defines if we are interested in beats/bars/subbeats
+    /// -2 = bar
+    /// -1 = half bar
+    /// 0 = beat
+    /// 1 = half beat
+    /// Everything is assuming 4 beats per bar for now
+    pub fn has_beat_occurred(&self, now: Instant, last: Instant, division_level: i32) -> bool {
+        let division_length = self.bar_duration; //TODO division_level
+        // TODO something seems imprecise, the beat is off pretty quickly
+        let divisions_start_to_last = (last - self.bar_start_time).as_nanos() / division_length.as_nanos();
+        let divisions_start_to_now  = (now  - self.bar_start_time).as_nanos() / division_length.as_nanos();
+        return divisions_start_to_now > divisions_start_to_last;
+    }
 }
 
 pub struct BeatTap {
-    input_beats: VecDeque<Instant>,
+    taps: VecDeque<Instant>,
 }
 
 impl BeatTap {
-    /// Enter a user tap. Will return a new BeatGrid after enough taps have been received.
-// When do we have enough taps? Do we know the new grid immediately or do we have to wait a bit until no taps are coming?
+    pub fn new() -> Self {
+        Self {
+            taps: VecDeque::new(),
+        }
+    }
+
+    /// Enter a user tap. Will wait until four taps are received, then returns a new BeatGrid
     pub fn tap(&mut self) -> Option<BeatGrid> {
-        unimplemented!();
+        self.taps.push_back(Instant::now());
+
+        // TODO Check if any of the intervals between taps is much larger than the last two
+        // If so there was a break where the user abandoned tapping a bar
+        if self.taps.len() >= 2 {
+            let last_interval = self.taps[self.taps.len() - 1] - self.taps[self.taps.len() - 2];
+            
+        }
+
+        if self.taps.len() >= 4 {
+            let res = Some(BeatGrid {
+                bar_start_time: self.taps[0],
+                bar_duration: Duration::from_secs_f32((self.taps[3] - self.taps[0]).as_secs_f32() * (4.0/3.0))
+            });
+            self.taps.clear();
+            res
+        } else {
+            None
+        }    
     }
 }
 
