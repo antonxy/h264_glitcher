@@ -37,7 +37,6 @@ fn beat_flash(beat: &BeatPredictor, offset: Duration, divisions: Option<u32>) ->
 pub fn run(
     pipe_reader: PipeReader,
     mask_path: Option<&Path>,
-    beat_predictor: Arc<Mutex<BeatPredictor>>,
     streaming_params: Arc<Mutex<StreamingParams>>,
 ) {
     // Start decoder reading from the pipe
@@ -137,10 +136,10 @@ pub fn run(
 
                         let uniforms = {
                             let params = streaming_params.lock().unwrap();
-                            let beat = beat_predictor.lock().unwrap();
                             let flash =
-                                *params.led_flash ||
-                                beat_flash(&beat, *params.beat_offset, params.led_flash_beats);
+                                //*params.led_flash ||
+                                //beat_flash(&beat, *params.beat_offset, params.led_flash_beats);
+                                false;
                             let led_color = if flash {
                                 [1.0, 1.0, 1.0]
                             } else {

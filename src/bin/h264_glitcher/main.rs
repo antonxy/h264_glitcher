@@ -2,7 +2,6 @@ use h264_glitcher::h264::*;
 use h264_glitcher::beat_predictor::BeatPredictor;
 use h264_glitcher::osc_var::{OscVar, LoopRange, OscValue};
 use h264_glitcher::sigma_delta::SigmaDelta;
-use h264_glitcher::fps_loop::{LoopTimer, LoopController};
 use h264_glitcher::player;
 use h264_glitcher::state::{State, ShortLoop, StreamingParams};
 use h264_glitcher::push2;
@@ -38,9 +37,6 @@ struct Opt {
 
     #[structopt(long, help="Load and parse all videos into memory")]
     prefetch: bool,
-
-    #[structopt(long, default_value = "1", help="Slow down input beat")]
-    external_beat_divider: u32,
 
     #[structopt(long, default_value = "http://[::1]:3000/", help="Thumbnail server base url")]
     thumbnail_server_base_url: String,
@@ -175,7 +171,6 @@ fn main() -> std::io::Result<()> {
 
 
     let streaming_params = Arc::new(Mutex::new(StreamingParams::default()));
-    let (mut loop_timer, loop_controller) = LoopTimer::new();
 
     // Run OSC listener
     let addr = match SocketAddr::from_str(&opt.listen_addr) {
@@ -194,30 +189,16 @@ fn main() -> std::io::Result<()> {
         let send_sock = Arc::clone(&send_sock);
         let streaming_params = streaming_params.clone();
         let paths = paths.clone();
-        let loop_controller = loop_controller.clone();
         move || {
-        video_name_sender(send_sock, streaming_params, loop_controller, paths, thumbnail_urls);
+        video_name_sender(send_sock, streaming_params, paths, thumbnail_urls);
     }});
 
-    let beat_predictor = BeatPredictor::new();
-    let beat_predictor = Arc::new(Mutex::new(beat_predictor));
-    thread::spawn({
-        let send_sock = Arc::clone(&send_sock);
-        let streaming_params = streaming_params.clone();
-        let beat_predictor = beat_predictor.clone();
-        let loop_controller = loop_controller.clone();
-        move || {
-        beat_thread(beat_predictor, send_sock, &addr, streaming_params, loop_controller);
-    }});
 
     thread::spawn({
         let send_sock = Arc::clone(&send_sock);
         let streaming_params = streaming_params.clone();
-        let beat_predictor = beat_predictor.clone();
-        let loop_controller = loop_controller.clone();
-        let external_beat_divider = opt.external_beat_divider;
         move || {
-        osc_listener(beat_predictor, external_beat_divider, send_sock, &addr, streaming_params, loop_controller);
+        osc_listener(send_sock, &addr, streaming_params);
     }});
 
     // Create pipe to connect stream loop to player
@@ -227,16 +208,14 @@ fn main() -> std::io::Result<()> {
         paths,
         opt.clone(),
         &streaming_params,
-        loop_timer,
         &send_sock,
         pipe_writer,
     );
 
     if opt.push2 {
         let streaming_params = streaming_params.clone();
-        let beat_predictor = beat_predictor.clone();
         thread::spawn(move || {
-            if let Err(e) = push2::run(streaming_params, beat_predictor, loop_controller) {
+            if let Err(e) = push2::run(streaming_params) {
                 eprintln!("Push 2 error: {}", e);
             }
         });
@@ -244,7 +223,7 @@ fn main() -> std::io::Result<()> {
 
     // Run the player (blocks)
     let mask_path = opt.mask.clone();
-    player::run(pipe_reader, mask_path.as_deref(), beat_predictor, streaming_params);
+    player::run(pipe_reader, mask_path.as_deref(), streaming_params);
 
     Ok(())
 }
@@ -252,7 +231,7 @@ fn main() -> std::io::Result<()> {
 
 const PALETTE : &'static [&'static str] = &["#EF476F", "#FFD166", "#06D6A0", "#118AB2", "#aa1d97"];
 
-fn video_name_sender(send_sock: Arc<Mutex<UdpSocket>>, streaming_params: Arc<Mutex<StreamingParams>>, loop_controller: LoopController, paths: Vec<PathBuf>, thumbnails: Vec<String>) {
+fn video_name_sender(send_sock: Arc<Mutex<UdpSocket>>, streaming_params: Arc<Mutex<StreamingParams>>, paths: Vec<PathBuf>, thumbnails: Vec<String>) {
 
     loop {
         let params = streaming_params.lock().unwrap().clone();
@@ -299,7 +278,8 @@ fn video_name_sender(send_sock: Arc<Mutex<UdpSocket>>, streaming_params: Arc<Mut
 
 }
 
-fn beat_thread(beat_predictor: Arc<Mutex<BeatPredictor>>, send_sock: Arc<Mutex<UdpSocket>>, addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>, mut fps_controller: LoopController) {
+/*
+fn beat_thread(beat_predictor: Arc<Mutex<BeatPredictor>>, send_sock: Arc<Mutex<UdpSocket>>, addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>) {
     let mut auto_switch_num = 0;
     let mut beat_num = 0;
 
@@ -332,7 +312,6 @@ fn beat_thread(beat_predictor: Arc<Mutex<BeatPredictor>>, send_sock: Arc<Mutex<U
                     let mut params = streaming_params.lock().unwrap();
                     if *params.active_state().auto_skip {
                         params.skip_frames = Some(20);
-                        fps_controller.wake_up_now();
                     }
 
                     if *params.active_state().auto_switch_n > 0 {
@@ -343,7 +322,6 @@ fn beat_thread(beat_predictor: Arc<Mutex<BeatPredictor>>, send_sock: Arc<Mutex<U
                         }
                         if switch_history.len() > 0 {
                             params.active_state_mut().video_num.set(switch_history[auto_switch_num] as i32);
-                            fps_controller.wake_up_now();
                         }
                     }
 
@@ -358,14 +336,13 @@ fn beat_thread(beat_predictor: Arc<Mutex<BeatPredictor>>, send_sock: Arc<Mutex<U
         }
     }
 }
+*/
 
-fn osc_listener(beat_predictor: Arc<Mutex<BeatPredictor>>, external_beat_divider: u32, send_sock: Arc<Mutex<UdpSocket>>, addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>, mut fps_controller: LoopController) {
+fn osc_listener(send_sock: Arc<Mutex<UdpSocket>>, addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>) {
     let sock = UdpSocket::bind(addr).unwrap();
     eprintln!("OSC: Listening to {}", addr);
 
     let mut buf = [0u8; rosc::decoder::MTU];
-
-    let mut beat_i = 0;
 
     let mut parse_message = |msg: &OscMessage, params: &mut StreamingParams, client_addr: SocketAddr| -> Result<(), ()> {
         if params.handle_osc_message(&msg) {}
@@ -398,11 +375,9 @@ fn osc_listener(beat_predictor: Arc<Mutex<BeatPredictor>>, external_beat_divider
                 },
                 "/skip_frames" => {
                     params.skip_frames = Some(msg.args[0].clone().int().ok_or(())? as usize);
-                    fps_controller.wake_up_now();
                 },
                 "/video_num" => {
                     params.edit_state_mut().video_num.set(msg.args[0].clone().int().ok_or(())?);
-                    fps_controller.wake_up_now();
                 },
                 "/short_loop" => {
                     let loop_len = msg.args[0].clone().int().ok_or(())?;
@@ -415,30 +390,13 @@ fn osc_listener(beat_predictor: Arc<Mutex<BeatPredictor>>, external_beat_divider
                         params.short_loop = None;
                     }
                 }
+/*
                 "/manual_beat" => {
                     if !*params.use_external_beat {
                         beat_predictor.lock().unwrap().put_input_beat();
                     }
                 },
-                "/traktor/beat" => {
-                    if *params.use_external_beat {
-                        beat_i += 1;
-                        if beat_i >= external_beat_divider {
-                            beat_i = 0;
-                            beat_predictor.lock().unwrap().put_input_beat();
-                            if let Some(client_addr) = params.client_addr {
-                                // Send beat
-                                let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
-                                    addr: "/traktor/beat".to_string(),
-                                    args: vec![OscType::Int(1)],
-                                })).unwrap();
-                                send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
-                            }
-                        }
-                    } else {
-                        beat_i = 0;
-                    }
-                },
+*/
                 "/reset" => {
                     *params.edit_state_mut() = State::default();
                     params.edit_state_mut().set_changed();
@@ -457,14 +415,12 @@ fn osc_listener(beat_predictor: Arc<Mutex<BeatPredictor>>, external_beat_divider
                 }
             }
         }
-        if params.active_state().fps.changed_incoming {
-            fps_controller.set_fps(*params.active_state().fps);
-            params.active_state_mut().fps.set_handled();
-        }
+/*
         if params.active_state().beat_multiplier.changed_incoming {
             beat_predictor.lock().unwrap().multiplier = 0.5_f32.powi(*params.active_state().beat_multiplier);
             params.active_state_mut().beat_multiplier.set_handled();
         }
+*/
         if params.active_slot.changed_incoming {
             params.set_active_slot(*params.active_slot);
             params.active_slot.set_handled()

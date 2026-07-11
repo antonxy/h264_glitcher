@@ -13,7 +13,6 @@ use crate::osc_var::LoopRange;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use crate::beat_predictor::BeatPredictor;
-use crate::fps_loop::LoopController;
 
 // Display dimensions
 const DISPLAY_WIDTH: i32 = 960;
@@ -31,11 +30,9 @@ fn toggle<T: PartialEq + Copy>(var: &mut T, val: T, reset: T) {
 
 pub fn run(
     streaming_params: Arc<Mutex<StreamingParams>>,
-    beat_predictor: Arc<Mutex<BeatPredictor>>,
-    fps_controller: LoopController,
 ) -> Result<()> {
     loop {
-        match run_connected(&streaming_params, &beat_predictor, &fps_controller) {
+        match run_connected(&streaming_params) {
             Ok(()) => return Ok(()),
             Err(e) => {
                 eprintln!("Push 2 disconnected: {}. Reconnecting...", e);
@@ -47,16 +44,12 @@ pub fn run(
 
 fn run_connected(
     streaming_params: &Arc<Mutex<StreamingParams>>,
-    beat_predictor: &Arc<Mutex<BeatPredictor>>,
-    fps_controller: &LoopController,
 ) -> Result<()> {
     // Initialize Push 2
     let mut push2 = Push2::new()?;
     println!("Connected to Push 2");
 
     push2.set_user_mode()?;
-    let mut fps_controller = fps_controller.clone();
-
     let mut last_redraw = Instant::now();
 
     loop {
@@ -65,7 +58,7 @@ fn run_connected(
             match event {
                 Push2Event::EncoderTurn { encoder, delta } => {
                     let mut params = streaming_params.lock().unwrap();
-                    let _changed = handle_encoder(&mut params, &mut fps_controller, encoder, delta);
+                    let _changed = handle_encoder(&mut params, encoder, delta);
                 }
                 Push2Event::Button { button: Button::TrackAbove4, pressed: true } => {
                     // Reset frame repeat to 1.0
@@ -74,10 +67,12 @@ fn run_connected(
                 }
                 Push2Event::Button { button: Button::TapTempo, pressed: true } => {
                     // Send manual beat - trigger restart_loop if loop_to_beat is enabled
+                    /*
                     let mut params = streaming_params.lock().unwrap();
                     if !*params.use_external_beat {
                         beat_predictor.lock().unwrap().put_input_beat();
                     }
+                    */
                 }
                 // Single strobe pad
                 Push2Event::Pad { row: 5, col: 0, velocity } => {
@@ -171,6 +166,7 @@ fn run_connected(
             push2.set_button_color(Button::TrackAbove8, if *params.edit_state().loop_to_beat {Color::Green} else {Color::Index(17)})?;
 
             // Flash Tap button with beat
+            /*
             if let Some(dur) = beat_predictor.lock().unwrap().duration_since_last_beat(*params.beat_offset) {
                 if dur.as_millis() < 100 {
                     push2.set_button_color(Button::TapTempo, Color::White)?;
@@ -178,6 +174,7 @@ fn run_connected(
                     push2.set_button_color(Button::TapTempo, Color::Off)?;
                 }
             }
+            */
 
             draw_timeline(&mut push2, &params)?;
             draw_encoders(&mut push2, &params)?;
@@ -189,7 +186,7 @@ fn run_connected(
     }
 }
 
-fn handle_encoder(params: &mut StreamingParams, fps_controller: &mut LoopController, encoder: Encoder, delta: i8) -> bool {
+fn handle_encoder(params: &mut StreamingParams, encoder: Encoder, delta: i8) -> bool {
     let sensitivity = 0.005;
     let change = delta as f32 * sensitivity;
     let state = params.edit_state_mut();
@@ -217,7 +214,6 @@ fn handle_encoder(params: &mut StreamingParams, fps_controller: &mut LoopControl
             let scale = current.max(1.0);
             let new_val = (current + change * scale * 4.0).clamp(1.0, 120.0);
             state.fps.set(new_val);
-            fps_controller.set_fps(new_val);
             true
         }
         // Encoder 4: Frame repeat (logarithmic)
