@@ -152,6 +152,7 @@ Process beat if one happened in the meantime
 */
 
     let mut last_frame_time = Instant::now();
+    let mut last_beat_time = Instant::now();
 
     loop {
         let mut params : StreamingParams = streaming_params.lock().unwrap().clone();
@@ -167,13 +168,22 @@ Process beat if one happened in the meantime
         let next_frame_time = last_frame_time + Duration::from_secs_f32(1.0/fps);
         let sleep_duration = (next_frame_time - Instant::now()).min(Duration::from_millis(100)); // Sleep at most 100ms so that state changes can be handled quickly enough
         std::thread::sleep(sleep_duration);
-        if Instant::now() < next_frame_time {
+        let current_frame_time = Instant::now();
+        if current_frame_time < next_frame_time {
             // If we woke up early, restart the loop so that we update the FPS and handle request, in case changes came in inbetween
             continue;
         }
 
         // TODO Here we can handle beat based stuff
         // If the FPS is low it could be a bit delayed vs the beat. But that might be fine
+
+        // Check if a beat occurred since the last frame
+        if params.beat_grid.has_beat_occurred(current_frame_time, last_frame_time, 0) {
+            println!("beat");
+            if *state.loop_to_beat {
+                current_frame = 0;
+            }
+        }
 
         // Emit the next frame
 
@@ -197,7 +207,7 @@ Process beat if one happened in the meantime
 
                 write_frame(&nal_unit, *state.byte_errors).expect("failed to write frame to stdout");
                 if nal_unit.nal_unit_type.is_picture_data() {
-                    last_frame_time = Instant::now();
+                    last_frame_time = current_frame_time;
                     break;
                 }
             }
