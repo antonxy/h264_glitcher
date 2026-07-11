@@ -27,9 +27,9 @@ def sha256sum(filename):
     with open(filename, 'rb', buffering=0) as f:
         return hashlib.file_digest(f, 'sha256').hexdigest()
 
-def walk(path): 
-    for p in path.iterdir(): 
-        if p.is_dir(): 
+def walk(path):
+    for p in path.iterdir():
+        if p.is_dir():
             yield from walk(p)
             continue
         yield p.resolve()
@@ -74,7 +74,7 @@ def get_content_folder(path):
 def get_encoded_path(path):
     sha = sha256sum(path)
     folder = get_content_folder(path)
-    return get_encoded_path_from_sha(sha, folder) 
+    return get_encoded_path_from_sha(sha, folder)
 
 def get_encoded_path_from_sha(sha, content_folder):
     return content_folder / "encoded_db" / (sha + ".h264")
@@ -194,7 +194,7 @@ def find_path_without_extension(path_without_ext):
     path_without_ext = path_without_ext.resolve()
     print(f"Looking for {path_without_ext}")
     if path_without_ext.parent.exists():
-        for p in path_without_ext.parent.iterdir(): 
+        for p in path_without_ext.parent.iterdir():
             if p.resolve().with_suffix('') == path_without_ext:
                 print(f"found {p.resolve()}")
                 return p.resolve()
@@ -252,7 +252,7 @@ def ingest(content_folder, old_folder):
             new_enc_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(enc, new_enc_path)
 
-        
+
 
 
 if __name__ == "__main__":
