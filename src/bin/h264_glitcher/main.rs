@@ -221,8 +221,7 @@ fn main() -> std::io::Result<()> {
     }});
 
     // Create pipe to connect stream loop to player
-    // Using os_pipe because thats easier to connect to ffmpeg than an mpsc
-    let (pipe_reader, pipe_writer) = os_pipe::pipe().expect("Failed to create pipe");
+    let (pipe_reader, pipe_writer) = pipe::pipe_buffered();
 
     stream_loop::start_stream_thread(
         paths,

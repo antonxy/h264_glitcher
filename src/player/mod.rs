@@ -2,7 +2,7 @@ pub mod decoder;
 pub mod mask;
 pub mod renderer;
 
-pub use decoder::{DecodedFrame, start_decoder_thread_from_path};
+pub use decoder::{DecodedFrame, start_decoder_thread};
 pub use mask::{create_default_mask, load_mask_texture};
 pub use renderer::{drain_latest_frame, Renderer};
 pub use renderer::Uniforms;
@@ -22,9 +22,7 @@ use std::time::Duration;
 use winit::event::{Event, WindowEvent};
 use winit::event_loop::EventLoop;
 use winit::window::{Fullscreen, WindowBuilder};
-use os_pipe::PipeReader;
-use std::os::fd::OwnedFd;
-use std::os::fd::AsRawFd;
+use pipe::PipeReader;
 use crate::beat_predictor::BeatPredictor;
 use crate::state::StreamingParams;
 
@@ -43,9 +41,7 @@ pub fn run(
     streaming_params: Arc<Mutex<StreamingParams>>,
 ) {
     // Start decoder reading from the pipe
-    let fd : OwnedFd = pipe_reader.into();
-    let input_path = format!("/dev/fd/{}", fd.as_raw_fd());
-    let frame_receiver = start_decoder_thread_from_path(input_path);
+    let frame_receiver = start_decoder_thread(pipe_reader);
 
     let event_loop = EventLoop::new().expect("Failed to create event loop");
 

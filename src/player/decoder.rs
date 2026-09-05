@@ -4,6 +4,7 @@ use ffmpeg_next::format::Pixel;
 use ffmpeg_next::frame::Video as VideoFrame;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
+use pipe::PipeReader;
 
 pub struct DecodedFrame {
     pub width: u32,
@@ -14,11 +15,11 @@ pub struct DecodedFrame {
 }
 
 /// Start decoder thread reading from a given ffmpeg input path
-pub fn start_decoder_thread_from_path(input_path: String) -> Receiver<DecodedFrame> {
+pub fn start_decoder_thread(reader: PipeReader) -> Receiver<DecodedFrame> {
     let (tx, rx) = mpsc::channel();
 
     thread::spawn(move || {
-        if let Err(e) = decoder_loop(tx, &input_path) {
+        if let Err(e) = decoder_loop(tx, reader) {
             eprintln!("Decoder error: {}", e);
         }
     });
@@ -26,11 +27,12 @@ pub fn start_decoder_thread_from_path(input_path: String) -> Receiver<DecodedFra
     rx
 }
 
-fn decoder_loop(tx: Sender<DecodedFrame>, input_path: &str) -> Result<(), ffmpeg::Error> {
+fn decoder_loop(tx: Sender<DecodedFrame>, reader: PipeReader) -> Result<(), ffmpeg::Error> {
     ffmpeg::init()?;
 
     // Use ffmpeg's demuxer to read raw H264 from the given input
-    let mut ictx = ffmpeg::format::input(&input_path)?;
+	let stream = ffmpeg::format::context::StreamIo::from_read(reader)?;
+    let mut ictx = ffmpeg::format::input_from_stream(stream, None, None)?;
 
     let video_stream_index = ictx
         .streams()
@@ -71,7 +73,7 @@ fn receive_frames(
 
     while decoder.receive_frame(&mut decoded).is_ok() {
         if decoded.format() != Pixel::YUV420P {
-            eprintln!("Warning: frame format is {:?}, expected YUV420P", decoded.format());
+            // eprintln!("Warning: frame format is {:?}, expected YUV420P", decoded.format());
         }
 
         let width = decoded.width();

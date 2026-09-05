@@ -14,7 +14,7 @@ pub struct State {
     pub auto_skip: OscVar<bool>,
     pub frame_repeat: OscVar<f32>, // Values < 1 drop frames, non integer values drop / repeat frames sometimes
     pub loop_to_beat: OscVar<bool>,
-    pub fps: OscVar<f32>,
+    pub fps: OscVar<f32>, // TODO setting invalid fps can crash the program
     pub auto_switch_n: OscVar<i32>,
     pub switch_history: VecDeque<usize>,
     pub byte_errors: OscVar<f32>,

@@ -7,6 +7,20 @@ Can be controlled via OSC.
 
 https://user-images.githubusercontent.com/4194320/148616193-57d7ca6b-afb8-4751-b33e-0c5017b6872c.mp4
 
+## Building
+
+### Windows
+
+Get ffmpeg with headers:
+- for example here: https://github.com/GyanD/codexffmpeg/releases/download/9.0.1/ffmpeg-9.0.1-full_build-shared.7z
+- or from vcpkg: `vcpkg install ffmpeg:x64-windows`
+
+Set the `FFMPEG_DIR` env var to the folder containing `bin`, `include`, `lib` and add the dlls to `Path`:
+```
+$env:FFMPEG_DIR = "C:\...\ffmpeg-9.0.1-full_build-shared"
+$env:Path += "C:\...\ffmpeg-9.0.1-full_build-shared\bin"
+```
+
 ## Using the Glitcher
 ### Prepare Videos
 
