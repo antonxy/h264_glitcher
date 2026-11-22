@@ -1,19 +1,18 @@
 use h264_glitcher::h264::*;
 use h264_glitcher::beat_predictor::BeatTap;
-use h264_glitcher::osc_var::{OscVar, LoopRange, OscValue};
+use h264_glitcher::osc_var::{LoopRange, OscValue};
 use h264_glitcher::sigma_delta::SigmaDelta;
 use h264_glitcher::player;
 use h264_glitcher::state::{State, ShortLoop, StreamingParams};
-use h264_glitcher::push2;
+// use h264_glitcher::push2;
 
 extern crate structopt;
 mod stream_loop;
 
+use std::collections::HashMap;
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom, BufReader};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::str::FromStr;
-use std::rc::Rc;
 use std::time::Duration;
 use std::vec::Vec;
 use structopt::StructOpt;
@@ -22,7 +21,6 @@ use std::sync::{Mutex, Arc};
 use std::net::{SocketAddr, UdpSocket};
 use rosc::{OscPacket, OscMessage, encoder, OscType};
 use walkdir::WalkDir;
-use std::time::Instant;
 
 #[derive(Debug, Clone, StructOpt)]
 #[structopt(name = "h264_glitcher", about = "Live controllable h264 glitcher.",
@@ -50,79 +48,6 @@ struct Opt {
 
     #[structopt(long, help="Enable Push 2 controller")]
     push2: bool,
-}
-
-
-/// Contains an open video file and an index for fast access to NALs
-struct LoadedVideo {
-    file: File,
-    nal_locations: Vec<NalLocation>,
-}
-
-impl LoadedVideo {
-    fn load(path: &Path) -> std::io::Result<LoadedVideo> {
-        let mut file = File::open(path)?;
-
-        let mut data = Vec::new();
-        file.read_to_end(&mut data)?;
-        let nal_locations: Vec<NalLocation> = NalOffsetIterator::new(data.iter().copied()).collect();
-        eprintln!("Indexed {} NALs from {:?}", nal_locations.len(), path);
-
-        Ok(LoadedVideo { file, nal_locations })
-    }
-
-    fn len(&self) -> usize {
-        self.nal_locations.len()
-    }
-
-    fn read_nal(&mut self, index: usize) -> Result<NalUnit, String> {
-        let loc = *self.nal_locations.get(index)
-            .ok_or_else(|| format!("NAL index {} out of bounds", index))?;
-
-        let mut bytes = vec![0u8; loc.length];
-        self.file.seek(SeekFrom::Start(loc.offset as u64))
-            .map_err(|e| format!("Seek failed: {}", e))?;
-        self.file.read_exact(&mut bytes)
-            .map_err(|e| format!("Read failed: {}", e))?;
-
-        NalUnit::from_bytes(&bytes).map_err(|e| format!("Parse failed: {:?}", e))
-    }
-}
-
-struct VideoLibrary {
-    paths: Vec<PathBuf>,
-    cache: Vec<Option<LoadedVideo>>,
-}
-
-impl VideoLibrary {
-    fn new(paths: Vec<PathBuf>) -> Self {
-        let cache: Vec<Option<LoadedVideo>> = (0..paths.len()).map(|_| None).collect();
-        VideoLibrary { paths, cache }
-    }
-
-    fn len(&self) -> usize {
-        self.paths.len()
-    }
-
-    fn get(&mut self, index: usize) -> &mut LoadedVideo {
-        if self.cache[index].is_none() {
-            let video = LoadedVideo::load(&self.paths[index])
-                .expect("Failed to load video");
-            self.cache[index] = Some(video);
-        }
-        self.cache[index].as_mut().unwrap()
-    }
-
-    fn preload_all(&mut self) {
-        for i in 0..self.paths.len() {
-            if self.cache[i].is_none() {
-                self.cache[i] = Some(
-                    LoadedVideo::load(&self.paths[i])
-                    .expect("Failed to load video in preload")
-                )
-            }
-        }
-    }
 }
 
 
@@ -198,8 +123,9 @@ fn main() -> std::io::Result<()> {
     thread::spawn({
         let send_sock = Arc::clone(&send_sock);
         let streaming_params = streaming_params.clone();
+        let paths = paths.clone();
         move || {
-        osc_listener(send_sock, &addr, streaming_params);
+        osc_listener(send_sock, &addr, streaming_params, paths);
     }});
 
     // Create pipe to connect stream loop to player
@@ -209,18 +135,17 @@ fn main() -> std::io::Result<()> {
         paths,
         opt.clone(),
         &streaming_params,
-        &send_sock,
         pipe_writer,
     );
 
-    if opt.push2 {
-        let streaming_params = streaming_params.clone();
-        thread::spawn(move || {
-            if let Err(e) = push2::run(streaming_params) {
-                eprintln!("Push 2 error: {}", e);
-            }
-        });
-    }
+    // if opt.push2 {
+    //     let streaming_params = streaming_params.clone();
+    //     thread::spawn(move || {
+    //         if let Err(e) = push2::run(streaming_params) {
+    //             eprintln!("Push 2 error: {}", e);
+    //         }
+    //     });
+    // }
 
     // Run the player (blocks)
     let mask_path = opt.mask.clone();
@@ -279,69 +204,11 @@ fn video_name_sender(send_sock: Arc<Mutex<UdpSocket>>, streaming_params: Arc<Mut
 
 }
 
-/*
-fn beat_thread(beat_predictor: Arc<Mutex<BeatPredictor>>, send_sock: Arc<Mutex<UdpSocket>>, addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>) {
-    let mut auto_switch_num = 0;
-    let mut beat_num = 0;
-
-    loop {
-        let params = streaming_params.lock().unwrap().clone();
-        let next_beat_dur = beat_predictor.lock().unwrap().duration_to_next_beat(*params.beat_offset);
-        if let Some(next_beat_dur) = next_beat_dur {
-            // Sleep max 100ms so that we don't miss if the beat speed changes from a very low
-            // one to a high one
-            if next_beat_dur > Duration::from_millis(100) {
-                std::thread::sleep(Duration::from_millis(90));
-            } else {
-                std::thread::sleep(next_beat_dur);
-
-                beat_num += 1;
-
-                if beat_num >= params.beat_divider {
-                    beat_num = 0;
-
-                    if let Some(client_addr) = params.client_addr {
-                        // Send beat
-                        let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
-                            addr: "/beat_delayed".to_string(),
-                            args: vec![OscType::Int(1)],
-                        })).unwrap();
-                        send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
-                    }
-
-                    // Do the beat stuff here
-                    let mut params = streaming_params.lock().unwrap();
-                    if *params.active_state().auto_skip {
-                        params.skip_frames = Some(20);
-                    }
-
-                    if *params.active_state().auto_switch_n > 0 {
-                        let switch_history = params.active_state().switch_history.clone();
-                        auto_switch_num += 1;
-                        if auto_switch_num >= switch_history.len() || auto_switch_num > *params.active_state().auto_switch_n as usize {
-                            auto_switch_num = 0;
-                        }
-                        if switch_history.len() > 0 {
-                            params.active_state_mut().video_num.set(switch_history[auto_switch_num] as i32);
-                        }
-                    }
-
-                    if *params.active_state().loop_to_beat {
-                        params.restart_loop = true;
-                    }
-                }
-
-            }
-        } else {
-            std::thread::sleep(Duration::from_millis(100));
-        }
-    }
-}
-*/
-
-fn osc_listener(send_sock: Arc<Mutex<UdpSocket>>, addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>) {
+fn osc_listener(send_sock: Arc<Mutex<UdpSocket>>, addr: &SocketAddr, streaming_params: Arc<Mutex<StreamingParams>>, paths: Vec<PathBuf>) {
     let sock = UdpSocket::bind(addr).unwrap();
     eprintln!("OSC: Listening to {}", addr);
+
+    let video_index: HashMap<String, i32> = paths.iter().enumerate().map(|(i, p)| (p.file_stem().unwrap().to_string_lossy().into_owned(), i as i32)).collect();
 
     let mut buf = [0u8; rosc::decoder::MTU];
 
@@ -379,8 +246,18 @@ fn osc_listener(send_sock: Arc<Mutex<UdpSocket>>, addr: &SocketAddr, streaming_p
                 "/skip_frames" => {
                     params.skip_frames = Some(msg.args[0].clone().int().ok_or(())? as usize);
                 },
-                "/video_num" => {
-                    params.edit_state_mut().video_num.set(msg.args[0].clone().int().ok_or(())?);
+                "/video" => {
+                    match &msg.args.as_slice() {
+                        &[OscType::Int(idx)] => params.state.video_num.set(*idx),
+                        &[OscType::String(name)] => {
+                            match video_index.get(name) {
+                                Some(idx) => params.state.video_num.set(*idx),
+                                None => eprintln!("/video received unknown video name"),
+                            }
+                        },
+                        _ => eprintln!("/video received unknown message type")
+                    }
+                    params.restart_loop = true;
                 },
                 "/short_loop" => {
                     let loop_len = msg.args[0].clone().int().ok_or(())?;
@@ -402,13 +279,6 @@ fn osc_listener(send_sock: Arc<Mutex<UdpSocket>>, addr: &SocketAddr, streaming_p
                     *params.edit_state_mut() = State::default();
                     params.edit_state_mut().set_changed();
                 },
-                "/copy_active" => {
-                    if *params.active_slot == *params.edit_slot {
-                        params.edit_slot.set((*params.edit_slot + 1) % 6);
-                    }
-                    *params.edit_state_mut() = params.active_state().clone();
-                    params.edit_state_mut().set_changed();
-                }
                 _ => {
                     eprintln!("Unhandled OSC address: {}", msg.addr);
                     eprintln!("Unhandled OSC arguments: {:?}", msg.args);
@@ -416,48 +286,8 @@ fn osc_listener(send_sock: Arc<Mutex<UdpSocket>>, addr: &SocketAddr, streaming_p
                 }
             }
         }
-/*
-        if params.active_state().beat_multiplier.changed_incoming {
-            beat_predictor.lock().unwrap().multiplier = 0.5_f32.powi(*params.active_state().beat_multiplier);
-            params.active_state_mut().beat_multiplier.set_handled();
-        }
-*/
-        if params.active_slot.changed_incoming {
-            params.set_active_slot(*params.active_slot);
-            params.active_slot.set_handled()
-        }
-        if params.edit_slot.changed_incoming {
-            params.set_edit_slot(*params.edit_slot);
-            params.edit_slot.set_handled()
-        }
         Ok(())
     };
-
-    // Beat blink thread
-    thread::spawn({
-        let params = streaming_params.clone();
-        let send_sock = send_sock.clone();
-        move || {
-            let mut last_time = Instant::now();
-            loop {
-                let current_time = Instant::now();
-                let params = params.lock().unwrap().clone();
-                if params.beat_grid.has_beat_occurred(current_time, last_time, 0) {
-                    if let Some(client_addr) = params.client_addr {
-                        // Send beat
-                        let msg_buf = encoder::encode(&OscPacket::Message(OscMessage {
-                            addr: "/beat_delayed".to_string(),
-                            args: vec![OscType::Int(1)],
-                        })).unwrap();
-                        send_sock.lock().unwrap().send_to(&msg_buf, client_addr).unwrap();
-                    }
-                }
-                last_time = current_time;
-                // TODO we kind of know when the next beat will occurr
-                std::thread::sleep(Duration::from_millis(10));
-            }
-        }
-    });
 
     loop {
         match sock.recv_from(&mut buf) {

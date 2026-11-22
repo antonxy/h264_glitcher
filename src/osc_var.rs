@@ -1,27 +1,36 @@
-use std::{net::{UdpSocket, SocketAddr}, ops::Deref, time::Duration, convert::TryInto};
+use std::{convert::TryInto, net::{SocketAddr, UdpSocket}, ops::Deref, sync::atomic::AtomicBool, time::Duration};
 
+use ffmpeg_next::util::interrupt::new;
 use rosc::{encoder, OscPacket, OscMessage, OscType};
+
+// TODO maybe this could use atomics to avoid the need for a mutex around it
+// path could be compile time constant:
+// struct ValueAddress;
+// impl Named for ValueAddress {
+//     const ADDRESS: &'static str = "/value";
+// }
+// OscVar<T, ValueAddress>
+//
+// or would 'static &str work?
+// maybe need a wrapper struct Immutable<T>
 
 #[derive(Clone)]
 pub struct OscVar<T> {
     pub value: T,
 
     // Whether the var was changed and the new value should be sent on OSC
-    pub changed_outgoing: bool,
-
-    // Whether the var was changed and the new value has to be handled still
-    pub changed_incoming: bool,
+    pub changed: bool,
 
     pub address: String,
 }
 
 impl<T: Default> Default for OscVar<T> {
     fn default() -> Self {
-        Self { value: T::default(), changed_outgoing: true, changed_incoming: false, address: "".to_string() }
+        Self { value: T::default(), changed: true, address: "".to_string() }
     }
 }
 
-impl<T> Deref for OscVar<T> {
+impl<T: Sync> Deref for OscVar<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -31,23 +40,18 @@ impl<T> Deref for OscVar<T> {
 
 impl<T : PartialEq + OscValue + Copy + OscValue<Target = T>> OscVar<T> {
     pub fn new<S: Into<String>>(address: S, value: T) -> Self {
-        Self { value: value, changed_outgoing: true, changed_incoming: false, address: address.into() }
+        Self { value: value, changed: true, address: address.into() }
     }
 
     pub fn set(&mut self, value: T) {
         if self.value != value {
             self.value = value;
-            self.changed_outgoing = true;
+            self.changed = true;
         }
     }
 
     pub fn set_changed(&mut self) {
-        self.changed_outgoing = true;
-        self.changed_incoming = true;
-    }
-
-    pub fn set_handled(&mut self) {
-        self.changed_incoming = false;
+        self.changed = true;
     }
 
     pub fn send(&mut self, socket: &UdpSocket, client_addr: &SocketAddr) {
@@ -56,21 +60,20 @@ impl<T : PartialEq + OscValue + Copy + OscValue<Target = T>> OscVar<T> {
             args: self.value.to_args(),
         })).unwrap();
         socket.send_to(&msg_buf, client_addr).unwrap();
-        self.changed_outgoing = false;
+        self.changed = false;
     }
 
     pub fn send_if_changed(&mut self, socket: &UdpSocket, client_addr: &SocketAddr) {
-        if self.changed_outgoing {
+        if self.changed {
             self.send(socket, client_addr);
         }
     }
 
     pub fn handle_osc_message(&mut self, msg: &OscMessage) -> bool {
         if msg.addr == self.address {
-            let value = T::try_from_args(&msg.args).unwrap(); //TODO maybe don't crash on malformed message pls
-            if self.value != value {
-                self.value = value;
-                self.changed_incoming = true;
+            match T::try_from_args(&msg.args) {
+                Some(new_value) => self.value = new_value,
+                None => eprintln!("Failed to handle message at {}", self.address),
             }
             true
         } else {
