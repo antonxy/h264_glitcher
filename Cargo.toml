@@ -7,6 +7,9 @@ default-run = "h264_glitcher"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[features]
+validator = ["dep:visit_diff", "dep:colored" ]
+
 [[bin]]
 name = "h264_glitcher"
 
@@ -15,6 +18,7 @@ name = "inspect_video"
 
 [[bin]]
 name = "validate_video_parameters"
+required-features = ["validator"]
 
 [dependencies]
 pipe = "0.4.0"
@@ -25,8 +29,6 @@ rosc = "0.10"
 itertools = "0.10"
 spin_sleep = "1"
 bitstream-io = "1"
-visit_diff = "0.1"
-colored = "2"
 walkdir = "*"
 
 axum = "0.8"
@@ -47,3 +49,7 @@ push2_display = "0.2"
 midir = "0.10"
 anyhow = "1.0"
 embedded-graphics = "0.7"
+
+# validator
+visit_diff = { version = "0.1", optional = true }
+colored = { version = "2", optional = true }

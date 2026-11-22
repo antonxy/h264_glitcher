@@ -3,9 +3,9 @@ use crate::h264::{
     ParseError,
 };
 use bitstream_io::BitRead;
-use visit_diff::Diff;
 
-#[derive(Clone, Debug, Diff, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "validator", derive(visit_diff::Diff, Deserialize))]
 pub struct Pps {
     pub pic_parameter_set_id: u8,
     pub seq_parameter_set_id: u8,
@@ -75,7 +75,8 @@ impl Pps {
     }
 }
 
-#[derive(Clone, Debug, Diff, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "validator", derive(visit_diff::Diff, Deserialize))]
 pub struct PpsMoreData {
     pub transform_8x8_mode_flag: bool,
     // pic_scaling_matrix_present_flag,
