@@ -1,10 +1,12 @@
 pub mod h264;
 pub mod beat_predictor;
 pub mod fps_loop;
-pub mod thumbnail_server;
+#[cfg(feature = "web_server")]
+pub mod web_server;
 pub mod osc_var;
 pub mod sigma_delta;
 pub mod player;
 pub mod state;
 #[cfg(feature = "push2")]
 pub mod push2;
+pub mod osc_handler;

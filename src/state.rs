@@ -67,7 +67,6 @@ pub struct ShortLoop {
 #[derive(Clone)]
 pub struct StreamingParams {
     pub skip_frames: Option<usize>,
-    pub client_addr: Option<SocketAddr>,
     pub short_loop: Option<ShortLoop>,
     pub restart_loop: bool, // request to jump back to start of loop. TODO would be better if we can set playhead directly
 
@@ -90,7 +89,6 @@ impl Default for StreamingParams {
     fn default() -> Self {
         Self {
             skip_frames: None,
-            client_addr: None,
             short_loop: None,
             restart_loop: false,
 

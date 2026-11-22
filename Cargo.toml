@@ -8,7 +8,9 @@ default-run = "h264_glitcher"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
+default = ["web_server"]
 validator = ["dep:visit_diff", "dep:colored" ]
+web_server = ["dep:axum", "dep:tokio", "dep:tower-http"]
 push2 = ["dep:push2_display", "dep:midir", "dep:anyhow", "dep:embedded-graphics"]
 
 [[bin]]
@@ -24,7 +26,6 @@ required-features = ["validator"]
 [dependencies]
 pipe = "0.4.0"
 enum_primitive = "0.1.1"
-rand = "0.8"
 structopt = "0.3"
 rosc = "0.10"
 itertools = "0.10"
@@ -32,9 +33,10 @@ spin_sleep = "1"
 bitstream-io = "1"
 walkdir = "*"
 
-axum = "0.8"
-tokio = { version = "1", features = ["net", "rt-multi-thread"] }
-tower-http = { version = "0.6", features = ["fs"] }
+# Web Server
+axum = { version = "0.8", features = ["tokio", "http1", "ws"], optional = true }
+tokio = { version = "1", features = ["net", "rt-multi-thread"], optional = true }
+tower-http = { version = "0.6", features = ["fs"], optional = true }
 
 # For video player
 ffmpeg-next = { version = "9", default-features = false, features = ["codec", "format"] }

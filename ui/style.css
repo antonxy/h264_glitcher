@@ -1,0 +1,20 @@
+#videos {
+    display: flex;
+    flex-wrap: wrap;
+}
+
+#videos > div {
+    position: relative;
+}
+
+#videos > div > span {
+    position: absolute;
+    width: 100%;
+    text-align: center;
+}
+
+#videos > div > img {
+    width: 177px;
+    height: 100px;
+    object-fit: contain;
+}
