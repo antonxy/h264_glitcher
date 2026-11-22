@@ -9,6 +9,7 @@ default-run = "h264_glitcher"
 
 [features]
 validator = ["dep:visit_diff", "dep:colored" ]
+push2 = ["dep:push2_display", "dep:midir", "dep:anyhow", "dep:embedded-graphics"]
 
 [[bin]]
 name = "h264_glitcher"
@@ -44,11 +45,11 @@ raw-window-handle = "0.5"
 glutin-winit = "0.4"
 png = "0.17"
 
-# For Push 2
-push2_display = "0.2"
-midir = "0.10"
-anyhow = "1.0"
-embedded-graphics = "0.7"
+# Push 2
+push2_display = { version = "0.2", optional=true }
+midir = { version = "0.10", optional=true }
+anyhow = { version = "1.0", optional=true }
+embedded-graphics = { version = "0.7", optional=true }
 
 # validator
 visit_diff = { version = "0.1", optional = true }

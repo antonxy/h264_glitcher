@@ -46,6 +46,7 @@ struct Opt {
     #[structopt(long, parse(from_os_str), help="Mask image for embedded player (indexed or grayscale PNG)")]
     mask: Option<PathBuf>,
 
+    #[cfg(feature="push2")]
     #[structopt(long, help="Enable Push 2 controller")]
     push2: bool,
 }
