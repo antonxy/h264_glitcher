@@ -76,7 +76,7 @@ impl NalUnit {
 
         // extensions
         match nal_unit_type {
-            14 | 20 | 21 => { return Err(ParseError::Unimplemented)? },
+            // 14 | 20 | 21 => { return Err(ParseError::Unimplemented)? }, // Decoders shall ignore reserved types
             _ => {}
         }
 

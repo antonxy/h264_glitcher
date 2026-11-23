@@ -1,3 +1,4 @@
+use std::ffi::OsStr;
 use std::fs::File;
 use std::thread;
 use std::sync::{Arc, Mutex};
@@ -6,6 +7,7 @@ use crate::{Opt, NalUnit, NALUnitType, SliceHeader, StreamingParams, SigmaDelta}
 use h264_glitcher::h264::{NalLocation, NalOffsetIterator};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::time::{Instant, Duration};
+use h264_glitcher::mp4::index_mp4;
 
 /// Contains an open video file and an index for fast access to NALs
 struct LoadedVideo {
@@ -15,14 +17,20 @@ struct LoadedVideo {
 
 impl LoadedVideo {
     fn load(path: &Path) -> std::io::Result<LoadedVideo> {
-        let mut file = File::open(path)?;
 
-        let mut data = Vec::new();
-        file.read_to_end(&mut data)?;
-        let nal_locations: Vec<NalLocation> = NalOffsetIterator::new(data.iter().copied()).collect();
-        eprintln!("Indexed {} NALs from {:?}", nal_locations.len(), path);
+        if path.extension() == Some(OsStr::new("mp4")) {
+            let mp4 = index_mp4(path).or(Err(std::io::Error::new(std::io::ErrorKind::Other, "Indexing mp4 failed")))?;
+            let file = File::open(path)?;
+            Ok(LoadedVideo { file, nal_locations: mp4.nal_locations })
+        }  else {
+            let mut file = File::open(path)?;
+            let mut data = Vec::new();
+            file.read_to_end(&mut data)?;
+            let nal_locations: Vec<NalLocation> = NalOffsetIterator::new(data.iter().copied()).collect();
+            eprintln!("Indexed {} NALs from {:?}", nal_locations.len(), path);
 
-        Ok(LoadedVideo { file, nal_locations })
+            Ok(LoadedVideo { file, nal_locations })
+        }
     }
 
     fn len(&self) -> usize {

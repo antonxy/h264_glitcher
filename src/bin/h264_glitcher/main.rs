@@ -70,16 +70,18 @@ fn main() -> std::io::Result<()> {
         .into_iter()
         .filter_map(|e| e.ok())
         .map(|p| p.into_path())
-        .filter(|p| p.extension().unwrap_or(std::ffi::OsStr::new("")) == "h264")
-        .map(|p| p.strip_prefix(&encoded_path).unwrap().with_extension("").to_path_buf())
+        .filter(|p| p.extension().unwrap_or(std::ffi::OsStr::new("")) == "h264" || p.extension().unwrap_or(std::ffi::OsStr::new("")) == "mp4")
+        // .map(|p| p.strip_prefix(&encoded_path).unwrap().with_extension("").to_path_buf())
         .collect();
 
     relative_paths.sort();
 
-    let paths : Vec<PathBuf> = relative_paths.iter().map(|p| append_extension(&encoded_path.join(p), "h264")).collect();
+    // let paths : Vec<PathBuf> = relative_paths.iter().map(|p| append_extension(&encoded_path.join(p), "h264")).collect();
+    let paths = relative_paths;
 
     // Check if all video files can be opened
     for path in &paths {
+        println!("{:?}", &path);
         File::open(path)?;
     }
 

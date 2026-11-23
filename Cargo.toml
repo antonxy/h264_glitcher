@@ -23,6 +23,9 @@ name = "inspect_video"
 name = "validate_video_parameters"
 required-features = ["validator"]
 
+[[bin]]
+name = "read_mp4"
+
 [dependencies]
 pipe = "0.4.0"
 enum_primitive = "0.1.1"

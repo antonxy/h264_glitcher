@@ -1,6 +1,7 @@
 use bitstream_io::{BitRead, BitWrite};
 use std::convert::{TryFrom, TryInto};
-use std::io;
+use std::error::Error;
+use std::{fmt, io};
 
 #[derive(Debug)]
 pub enum ParseError {
@@ -9,6 +10,14 @@ pub enum ParseError {
     IoError(io::Error),
     Unimplemented,
 }
+
+impl fmt::Display for ParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "failed to parse")
+    }
+}
+
+impl Error for ParseError {}
 
 impl From<io::Error> for ParseError {
     fn from(e: io::Error) -> Self {
